@@ -7,9 +7,7 @@
 	let newTTL = $state(3600);
 	let newImage = $state('default');
 
-	const apiKey = typeof localStorage !== 'undefined'
-		? localStorage.getItem('fclk_api_key') || ''
-		: '';
+	let apiKey = $state('');
 
 	async function apiFetch(path, opts = {}) {
 		return fetch(`/api${path}`, {
@@ -59,7 +57,7 @@
 		return 'var(--secondary)';
 	}
 
-	onMount(() => { refresh(); const i = setInterval(refresh, 3000); return () => clearInterval(i); });
+	onMount(() => { apiKey = localStorage.getItem('fclk_api_key') || ''; refresh(); const i = setInterval(refresh, 3000); return () => clearInterval(i); });
 </script>
 
 <div class="page-header">

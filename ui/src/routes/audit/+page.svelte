@@ -5,8 +5,7 @@
 	let error = $state('');
 	let severityFilter = $state('ALL');
 
-	const apiKey = typeof localStorage !== 'undefined'
-		? localStorage.getItem('fclk_api_key') || '' : '';
+	let apiKey = $state('');
 
 	async function refresh() {
 		try {
@@ -17,7 +16,7 @@
 		} catch (e) { error = e.message; }
 	}
 
-	onMount(() => { refresh(); const i = setInterval(refresh, 5000); return () => clearInterval(i); });
+	onMount(() => { apiKey = localStorage.getItem('fclk_api_key') || ''; refresh(); const i = setInterval(refresh, 5000); return () => clearInterval(i); });
 
 	function actionSeverity(action) {
 		if (action.includes('error') || action.includes('expired')) return 'ERROR';

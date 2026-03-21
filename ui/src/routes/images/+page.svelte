@@ -4,8 +4,7 @@
 	let images = $state([]);
 	let error = $state('');
 
-	const apiKey = typeof localStorage !== 'undefined'
-		? localStorage.getItem('fclk_api_key') || '' : '';
+	let apiKey = $state('');
 
 	async function refresh() {
 		try {
@@ -16,7 +15,7 @@
 		} catch (e) { error = e.message; }
 	}
 
-	onMount(refresh);
+	onMount(() => { apiKey = localStorage.getItem('fclk_api_key') || ''; refresh(); });
 
 	function formatSize(bytes) {
 		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;

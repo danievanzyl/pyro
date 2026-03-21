@@ -1,5 +1,6 @@
 <script>
 	import { onMount } from 'svelte';
+	import { browser } from '$app/environment';
 
 	let health = $state(null);
 	let sandboxes = $state([]);
@@ -7,8 +8,7 @@
 	let apiKeyInput = $state('');
 	let refreshInterval;
 
-	const getKey = () => typeof localStorage !== 'undefined' ? localStorage.getItem('fclk_api_key') || '' : '';
-	let apiKey = $state(getKey());
+	let apiKey = $state('');
 
 	function saveKey() {
 		if (apiKeyInput.trim()) {
@@ -52,6 +52,7 @@
 	}
 
 	onMount(() => {
+		apiKey = localStorage.getItem('fclk_api_key') || '';
 		fetchData();
 		refreshInterval = setInterval(fetchData, 3000);
 		return () => clearInterval(refreshInterval);
