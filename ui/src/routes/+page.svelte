@@ -1,16 +1,18 @@
 <script>
 	import { onMount } from 'svelte';
-	import { apiKey, getApiKey, setApiKey, apiFetch } from '$lib/auth.svelte.js';
+	import { hasApiKey, getApiKey, setApiKey, apiFetch } from '$lib/auth.svelte.js';
 
 	let health = $state(null);
 	let sandboxes = $state([]);
 	let error = $state('');
 	let apiKeyInput = $state('');
+	let authenticated = $state(hasApiKey());
 	let refreshInterval;
 
 	function saveKey() {
 		if (apiKeyInput.trim()) {
 			setApiKey(apiKeyInput.trim());
+			authenticated = true;
 			fetchData();
 			connectSSE();
 		}
@@ -99,7 +101,7 @@
 	</div>
 {/if}
 
-{#if !apiKey()}
+{#if !authenticated}
 	<div class="setup-card glass-panel">
 		<span class="material-symbols-outlined setup-icon">key</span>
 		<h3>Connect to your cluster</h3>
