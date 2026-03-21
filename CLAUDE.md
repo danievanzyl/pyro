@@ -42,8 +42,15 @@ make test           # full tests (requires Linux + KVM)
 - `GET /images/{name}` — get image info
 - `POST /images` — create image from Dockerfile
 
+### Streaming
+- `GET /events?api_key=KEY` — SSE event stream (sandbox lifecycle + health ticks)
+
 ### System
 - `GET /health` — health check
+
+## Security Notes
+
+- SSE and WebSocket endpoints pass API keys via query param (can't set headers). Scrub `api_key=` from access logs in production (nginx: `map` directive, or log format that omits query strings).
 
 ## Phases
 

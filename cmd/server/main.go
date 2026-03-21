@@ -68,10 +68,12 @@ func main() {
 		PrometheusEnabled: *promEnabled,
 	}, log)
 	if err != nil {
-		log.Error("setup otel", "err", err)
-		os.Exit(1)
+		log.Warn("otel setup failed, metrics disabled", "err", err)
+		// Non-fatal — server runs without metrics.
 	}
-	defer otelShutdown(context.Background())
+	if otelShutdown != nil {
+		defer otelShutdown(context.Background())
+	}
 
 	// Create sandbox manager.
 	mgr, err := sandbox.New(sandbox.Config{

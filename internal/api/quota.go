@@ -52,7 +52,11 @@ func NewQuotaEnforcer(st *store.Store, cfg QuotaConfig) *QuotaEnforcer {
 }
 
 // CheckCreateQuota validates that an API key can create a new sandbox.
+// Holds a per-key mutex to prevent TOCTOU races on concurrent creates.
 func (qe *QuotaEnforcer) CheckCreateQuota(ctx context.Context, apiKeyID string, requestedTTL int) error {
+	qe.mu.Lock()
+	defer qe.mu.Unlock()
+
 	// Check TTL limit.
 	if qe.config.MaxTTL > 0 && requestedTTL > qe.config.MaxTTL {
 		return fmt.Errorf("requested TTL %d exceeds maximum %d seconds", requestedTTL, qe.config.MaxTTL)

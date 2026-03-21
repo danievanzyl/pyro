@@ -26,7 +26,9 @@ func SetupUIRoutes(r chi.Router, uiFS fs.FS) {
 		}
 
 		// SPA fallback: serve index.html for all non-API, non-file routes.
-		r.URL.Path = "/"
-		fileServer.ServeHTTP(w, r)
+		// Clone the request to avoid mutating the original.
+		indexReq := r.Clone(r.Context())
+		indexReq.URL.Path = "/"
+		fileServer.ServeHTTP(w, indexReq)
 	})
 }

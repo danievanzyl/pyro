@@ -451,8 +451,11 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
+// ErrAtCapacity is returned when the sandbox manager can't create more VMs.
+var ErrAtCapacity = fmt.Errorf("at capacity")
+
 func isCapacityError(err error) bool {
-	return err != nil && len(err.Error()) > 11 && err.Error()[:11] == "at capacity"
+	return err != nil && strings.Contains(err.Error(), "at capacity")
 }
 
 func (s *Server) publishEvent(eventType string, data any) {
