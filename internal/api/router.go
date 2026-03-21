@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danievanzyl/firecrackerlacker/internal/observability"
 	"github.com/danievanzyl/firecrackerlacker/internal/protocol"
 	"github.com/danievanzyl/firecrackerlacker/internal/sandbox"
 	"github.com/danievanzyl/firecrackerlacker/internal/store"
@@ -17,20 +18,35 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
+// ServerConfig holds optional dependencies for the API server.
+type ServerConfig struct {
+	Metrics  *observability.Metrics
+	Quota    *QuotaEnforcer
+	ImageMgr *sandbox.ImageManager
+}
+
 // Server is the HTTP API server.
 type Server struct {
-	manager *sandbox.Manager
-	store   *store.Store
-	log     *slog.Logger
-	router  chi.Router
+	manager  *sandbox.Manager
+	store    *store.Store
+	log      *slog.Logger
+	router   chi.Router
+	metrics  *observability.Metrics
+	quota    *QuotaEnforcer
+	imageMgr *sandbox.ImageManager
 }
 
 // NewServer creates an API server.
-func NewServer(manager *sandbox.Manager, st *store.Store, log *slog.Logger) *Server {
+func NewServer(manager *sandbox.Manager, st *store.Store, log *slog.Logger, cfg *ServerConfig) *Server {
 	s := &Server{
 		manager: manager,
 		store:   st,
 		log:     log,
+	}
+	if cfg != nil {
+		s.metrics = cfg.Metrics
+		s.quota = cfg.Quota
+		s.imageMgr = cfg.ImageMgr
 	}
 	s.setupRoutes()
 	return s
@@ -46,6 +62,9 @@ func (s *Server) setupRoutes() {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
+	if s.metrics != nil {
+		r.Use(MetricsMiddleware(s.metrics))
+	}
 
 	// Health check (unauthenticated).
 	r.Get("/health", s.handleHealth)
@@ -61,6 +80,15 @@ func (s *Server) setupRoutes() {
 		r.Post("/sandboxes/{id}/exec", s.handleExecInSandbox)
 		r.Put("/sandboxes/{id}/files/*", s.handleFileWrite)
 		r.Get("/sandboxes/{id}/files/*", s.handleFileRead)
+	})
+
+	// Authenticated image + audit routes.
+	r.Group(func(r chi.Router) {
+		r.Use(AuthMiddleware(s.store))
+		if s.imageMgr != nil {
+			SetupImageRoutes(r, s.imageMgr)
+		}
+		SetupAuditRoutes(r, s.store)
 	})
 
 	// WebSocket routes (auth via query param, not middleware).
@@ -106,10 +134,18 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 	ak := APIKeyFromContext(r.Context())
 	ttl := time.Duration(req.TTL) * time.Second
 
+	// Quota check.
+	if s.quota != nil {
+		if err := s.quota.CheckCreateQuota(r.Context(), ak.ID, req.TTL); err != nil {
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	start := time.Now()
 	sb, err := s.manager.CreateSandbox(r.Context(), ak.ID, image, ttl)
 	if err != nil {
 		s.log.Error("create sandbox failed", "err", err)
-		// Distinguish capacity errors from internal errors.
 		if isCapacityError(err) {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
 			return
@@ -117,6 +153,19 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create sandbox"})
 		return
 	}
+
+	// Record metrics.
+	if s.metrics != nil {
+		s.metrics.RecordSandboxCreated(r.Context(), image, time.Since(start))
+	}
+
+	// Audit log.
+	s.store.LogAudit(r.Context(), &store.AuditEntry{
+		Action:    store.AuditSandboxCreated,
+		APIKeyID:  ak.ID,
+		SandboxID: sb.ID,
+		Detail:    fmt.Sprintf("image=%s ttl=%ds", image, req.TTL),
+	})
 
 	writeJSON(w, http.StatusCreated, sb)
 }
@@ -185,6 +234,13 @@ func (s *Server) handleDeleteSandbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.metrics != nil {
+		s.metrics.RecordSandboxDestroyed(r.Context(), "manual", sb.RemainingTTL())
+	}
+	s.store.LogAudit(r.Context(), &store.AuditEntry{
+		Action: store.AuditSandboxDestroyed, APIKeyID: ak.ID, SandboxID: id, Detail: "reason=manual",
+	})
+
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -241,12 +297,21 @@ func (s *Server) handleExecInSandbox(w http.ResponseWriter, r *http.Request) {
 		Timeout: req.Timeout,
 	}
 
+	start := time.Now()
 	resp, err := s.manager.ExecInSandbox(r.Context(), id, protoReq)
 	if err != nil {
 		s.log.Error("exec failed", "id", id, "err", err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "exec failed: " + err.Error()})
 		return
 	}
+
+	if s.metrics != nil {
+		s.metrics.RecordExec(r.Context(), time.Since(start), resp.ExitCode)
+	}
+	s.store.LogAudit(r.Context(), &store.AuditEntry{
+		Action: store.AuditSandboxExec, APIKeyID: ak.ID, SandboxID: id,
+		Detail: fmt.Sprintf("cmd=%s exit=%d", strings.Join(req.Command, " "), resp.ExitCode),
+	})
 
 	writeJSON(w, http.StatusOK, resp)
 }

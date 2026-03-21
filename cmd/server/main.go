@@ -1,16 +1,19 @@
 // Command server is the firecrackerlacker API server.
 //
-// It manages Firecracker microVM sandboxes for agentic workloads:
-// - REST API for sandbox lifecycle (create, exec, destroy)
+// Manages Firecracker microVM sandboxes for agentic workloads:
+// - REST API for sandbox lifecycle (create, exec, destroy, files)
+// - WebSocket streaming exec
 // - TTL-based automatic cleanup
 // - Startup reconciliation of orphaned VMs
-// - API key authentication
+// - API key authentication with per-key quotas
+// - OTEL metrics (Prometheus + OTLP)
+// - Audit logging
+// - Base image management
 package main
 
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -19,6 +22,7 @@ import (
 	"time"
 
 	"github.com/danievanzyl/firecrackerlacker/internal/api"
+	"github.com/danievanzyl/firecrackerlacker/internal/observability"
 	"github.com/danievanzyl/firecrackerlacker/internal/sandbox"
 	"github.com/danievanzyl/firecrackerlacker/internal/store"
 )
@@ -28,6 +32,7 @@ func main() {
 		listenAddr     = flag.String("listen", ":8080", "API server listen address")
 		dbPath         = flag.String("db", "/var/lib/firecrackerlacker/firecrackerlacker.db", "SQLite database path")
 		stateDir       = flag.String("state-dir", "/var/lib/firecrackerlacker/vms", "VM state directory")
+		imagesDir      = flag.String("images-dir", "/var/lib/firecrackerlacker/images", "Base images directory")
 		firecrackerBin = flag.String("firecracker", "/usr/bin/firecracker", "Firecracker binary path")
 		jailerBin      = flag.String("jailer", "/usr/bin/jailer", "Jailer binary path")
 		kernelPath     = flag.String("kernel", "/var/lib/firecrackerlacker/images/vmlinux", "Guest kernel path")
@@ -36,6 +41,10 @@ func main() {
 		maxSandboxes   = flag.Int("max-sandboxes", 100, "Maximum concurrent sandboxes")
 		reaperInterval = flag.Duration("reaper-interval", 5*time.Second, "TTL reaper check interval")
 		execTimeout    = flag.Duration("exec-timeout", 300*time.Second, "Default exec timeout")
+		otlpEndpoint   = flag.String("otlp-endpoint", "", "OTLP HTTP endpoint (e.g., localhost:4318)")
+		promEnabled    = flag.Bool("prometheus", true, "Enable Prometheus /metrics endpoint")
+		maxPerKey      = flag.Int("max-per-key", 10, "Max concurrent sandboxes per API key")
+		rateLimit      = flag.Int("rate-limit", 30, "Max sandbox creates per minute per key")
 	)
 	flag.Parse()
 
@@ -49,6 +58,18 @@ func main() {
 		os.Exit(1)
 	}
 	defer st.Close()
+
+	// Setup OTEL metrics.
+	metrics, otelShutdown, err := observability.Setup(context.Background(), observability.Config{
+		ServiceName:       "firecrackerlacker",
+		OTLPEndpoint:      *otlpEndpoint,
+		PrometheusEnabled: *promEnabled,
+	}, log)
+	if err != nil {
+		log.Error("setup otel", "err", err)
+		os.Exit(1)
+	}
+	defer otelShutdown(context.Background())
 
 	// Create sandbox manager.
 	mgr, err := sandbox.New(sandbox.Config{
@@ -67,10 +88,25 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Create image manager.
+	imgMgr, err := sandbox.NewImageManager(sandbox.ImageConfig{
+		ImagesDir: *imagesDir,
+	}, log)
+	if err != nil {
+		log.Warn("image manager init failed", "err", err)
+		// Non-fatal — image API will be unavailable.
+	}
+
+	// Create quota enforcer.
+	quota := api.NewQuotaEnforcer(st, api.QuotaConfig{
+		MaxConcurrentSandboxes: *maxPerKey,
+		MaxTTL:                 86400,
+		RateLimit:              *rateLimit,
+	})
+
 	// Reconcile orphaned VMs from previous run.
 	if err := mgr.Reconcile(context.Background()); err != nil {
 		log.Error("reconcile failed", "err", err)
-		// Non-fatal — continue startup.
 	}
 
 	// Start TTL reaper.
@@ -79,17 +115,23 @@ func main() {
 	go reaper.Run(reaperCtx)
 
 	// Start API server.
-	srv := api.NewServer(mgr, st, log)
+	srv := api.NewServer(mgr, st, log, &api.ServerConfig{
+		Metrics:  metrics,
+		Quota:    quota,
+		ImageMgr: imgMgr,
+	})
 	httpServer := &http.Server{
 		Addr:         *listenAddr,
 		Handler:      srv.Handler(),
 		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 600 * time.Second, // long for exec requests
+		WriteTimeout: 600 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
 
 	go func() {
-		log.Info("api server starting", "addr", *listenAddr)
+		log.Info("api server starting", "addr", *listenAddr,
+			"otlp", *otlpEndpoint, "prometheus", *promEnabled,
+			"max_per_key", *maxPerKey, "rate_limit", *rateLimit)
 		if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
 			log.Error("http server error", "err", err)
 			os.Exit(1)
@@ -110,6 +152,5 @@ func main() {
 	httpServer.Shutdown(shutdownCtx)
 	mgr.Shutdown(shutdownCtx)
 
-	_ = fmt.Sprintf("") // suppress unused import
 	log.Info("server stopped")
 }
