@@ -1,14 +1,12 @@
-// Shared API key state — persisted to localStorage, shared across all pages.
+// Shared API key — always reads from localStorage (synchronous, no race).
 
 const STORAGE_KEY = 'fclk_api_key';
 
 let _apiKey = $state('');
-let _initialized = false;
 
 export function getApiKey() {
-	if (!_initialized && typeof localStorage !== 'undefined') {
+	if (typeof localStorage !== 'undefined') {
 		_apiKey = localStorage.getItem(STORAGE_KEY) || '';
-		_initialized = true;
 	}
 	return _apiKey;
 }
@@ -24,25 +22,26 @@ export function setApiKey(key) {
 	}
 }
 
-export function initAuth() {
+// Reactive getter for use in templates ({#if apiKey()}).
+export function apiKey() {
+	// Re-read from storage to stay in sync.
 	if (typeof localStorage !== 'undefined') {
 		_apiKey = localStorage.getItem(STORAGE_KEY) || '';
-		_initialized = true;
 	}
-}
-
-// Reactive getter for use in components.
-export function apiKey() {
 	return _apiKey;
 }
 
 // Fetch helper with auth header.
 export async function apiFetch(path, opts = {}) {
 	const key = getApiKey();
+	if (!key) {
+		// Return a fake 401 so callers handle it gracefully.
+		return new Response(JSON.stringify({ error: 'no api key' }), { status: 401 });
+	}
 	return fetch(`/api${path}`, {
 		...opts,
 		headers: {
-			...(key ? { 'Authorization': `Bearer ${key}` } : {}),
+			'Authorization': `Bearer ${key}`,
 			'Content-Type': 'application/json',
 			...opts.headers
 		}
