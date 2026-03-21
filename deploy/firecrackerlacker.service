@@ -9,11 +9,15 @@ ExecStart=/opt/firecrackerlacker/bin/firecrackerlacker-server \
   --listen :8080 \
   --db /opt/firecrackerlacker/db/firecrackerlacker.db \
   --state-dir /opt/firecrackerlacker/vms \
+  --images-dir /opt/firecrackerlacker/images \
   --firecracker /usr/local/bin/firecracker \
   --kernel /opt/firecrackerlacker/images/default/vmlinux \
   --rootfs /opt/firecrackerlacker/images/default/rootfs.ext4 \
   --bridge fcbr0 \
-  --max-sandboxes 50
+  --max-sandboxes 50 \
+  --max-per-key 10 \
+  --rate-limit 30 \
+  --prometheus
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536

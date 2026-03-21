@@ -11,10 +11,10 @@
 
 ## Testing on Homelab
 
-- [ ] Deploy updated server with Phase 3 wiring
-- [ ] Test audit log populates on create/exec/destroy
-- [ ] Test quota enforcement (exceed max-per-key, verify 429)
-- [ ] Test TTL reaper auto-destroy (create short-TTL sandbox, wait, verify gone)
+- [x] Deploy updated server with Phase 3 wiring
+- [x] Test audit log populates on create/exec/destroy
+- [x] Test quota enforcement (exceed max-per-key, verify 429)
+- [x] Test TTL reaper auto-destroy (10s TTL sandbox → verified auto-destroyed)
 - [ ] Test orphan recovery (kill server, restart, verify VM reclaimed or cleaned)
 - [ ] Test WebSocket streaming exec
 - [ ] Test network isolation iptables policies
