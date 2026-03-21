@@ -1,61 +1,155 @@
 <script>
+	import '../app.css';
 	let { children } = $props();
+
+	const navItems = [
+		{ href: '/', icon: 'dashboard', label: 'Dashboard' },
+		{ href: '/sandboxes', icon: 'memory', label: 'VM Instances' },
+		{ href: '/images', icon: 'collections_bookmark', label: 'Images' },
+		{ href: '/audit', icon: 'description', label: 'System Logs' },
+	];
+
+	let currentPath = $state('/');
+
+	function navigate(path) {
+		currentPath = path;
+	}
 </script>
 
-<svelte:head>
-	<style>
-		:global(*) { box-sizing: border-box; margin: 0; padding: 0; }
-		:global(body) {
-			font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
-			background: #0a0a0a;
-			color: #e0e0e0;
-			line-height: 1.5;
-		}
-		:global(a) { color: #ff6b35; text-decoration: none; }
-		:global(a:hover) { text-decoration: underline; }
-	</style>
-</svelte:head>
+<svelte:window onpopstate={() => { if (typeof window !== 'undefined') currentPath = window.location.pathname; }} />
 
 <div class="shell">
-	<nav>
-		<div class="logo">🔥 firecrackerlacker</div>
-		<div class="links">
-			<a href="/">Dashboard</a>
-			<a href="/sandboxes">Sandboxes</a>
-			<a href="/images">Images</a>
-			<a href="/audit">Audit</a>
+	<aside class="sidebar glass-panel">
+		<div class="brand">
+			<span class="material-symbols-outlined brand-icon">local_fire_department</span>
+			<div>
+				<div class="brand-name">firecrackerlacker</div>
+				<div class="brand-sub">Celestial Observer</div>
+			</div>
 		</div>
-	</nav>
-	<main>
+
+		<nav class="nav-main">
+			{#each navItems as item}
+				<a
+					href={item.href}
+					class="nav-item"
+					class:active={currentPath === item.href}
+					onclick={() => navigate(item.href)}
+				>
+					<span class="material-symbols-outlined">{item.icon}</span>
+					{item.label}
+				</a>
+			{/each}
+		</nav>
+
+		<div class="nav-spacer"></div>
+
+		<button class="provision-btn" onclick={() => { currentPath = '/sandboxes'; window.location.href = '/sandboxes'; }}>
+			<span class="material-symbols-outlined">add</span>
+			Provision VM
+		</button>
+
+		<nav class="nav-secondary">
+			<a href="https://github.com/danievanzyl/firecrackerlacker" class="nav-item" target="_blank">
+				<span class="material-symbols-outlined">menu_book</span>
+				Documentation
+			</a>
+		</nav>
+	</aside>
+
+	<main class="content">
 		{@render children()}
 	</main>
 </div>
 
 <style>
 	.shell {
-		max-width: 1200px;
-		margin: 0 auto;
-		padding: 1rem;
+		display: flex;
+		min-height: 100vh;
 	}
-	nav {
+
+	.sidebar {
+		width: 260px;
+		padding: 1.5rem 1rem;
+		display: flex;
+		flex-direction: column;
+		position: fixed;
+		top: 0;
+		left: 0;
+		bottom: 0;
+		z-index: 10;
+		border-radius: 0;
+		border-right: 1px solid rgba(73, 70, 81, 0.2);
+		border-top: none;
+		border-bottom: none;
+		border-left: none;
+	}
+
+	.brand {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
-		padding: 1rem 0;
-		border-bottom: 1px solid #222;
+		gap: 0.75rem;
+		padding: 0.5rem;
 		margin-bottom: 2rem;
 	}
-	.logo {
-		font-size: 1.1rem;
+	.brand-icon { font-size: 1.75rem; color: var(--primary); }
+	.brand-name {
+		font-family: var(--font-headline);
 		font-weight: 700;
-		color: #ff6b35;
+		font-size: 0.95rem;
 	}
-	.links {
+	.brand-sub {
+		font-size: 0.7rem;
+		color: var(--on-surface-variant);
+		letter-spacing: 0.05em;
+	}
+
+	.nav-main, .nav-secondary {
 		display: flex;
-		gap: 1.5rem;
+		flex-direction: column;
+		gap: 0.25rem;
+	}
+	.nav-spacer { flex: 1; }
+
+	.nav-item {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		padding: 0.6rem 0.75rem;
+		border-radius: 0.5rem;
+		font-size: 0.85rem;
+		color: var(--on-surface-variant);
+		text-decoration: none;
+		transition: all 0.15s;
+	}
+	.nav-item:hover {
+		background: var(--surface-container-high);
+		color: var(--on-surface);
+		text-decoration: none;
+	}
+	.nav-item.active {
+		background: rgba(163, 67, 231, 0.15);
+		color: var(--primary);
+	}
+	.nav-item :global(.material-symbols-outlined) { font-size: 1.25rem; }
+
+	.provision-btn {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.65rem 1rem;
+		margin: 1rem 0.5rem;
+		border-radius: 0.75rem;
+		background: linear-gradient(135deg, var(--primary), var(--primary-dim));
+		color: #4a0076;
+		font-weight: 600;
 		font-size: 0.85rem;
 	}
-	main {
-		min-height: 80vh;
+	.provision-btn:hover { opacity: 0.9; }
+
+	.content {
+		flex: 1;
+		margin-left: 260px;
+		padding: 2rem 2.5rem;
 	}
 </style>

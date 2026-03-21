@@ -3,3 +3,9 @@ bin/
 *.db-wal
 *.db-shm
 .env
+ui/node_modules/
+ui/build/
+ui/.svelte-kit/
+ui/bun.lock
+*.png
+.playwright-mcp/

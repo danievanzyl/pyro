@@ -1,0 +1,78 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Inter:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0');
+
+:root {
+	--bg: #0f0d16;
+	--surface: #0f0d16;
+	--surface-container: #1b1823;
+	--surface-container-high: #211e2a;
+	--surface-container-highest: #272431;
+	--surface-container-low: #14121c;
+	--on-surface: #f5eefc;
+	--on-surface-variant: #aea9b6;
+	--primary: #d394ff;
+	--primary-dim: #a343e7;
+	--secondary: #ff6d88;
+	--tertiary: #b5ffc2;
+	--error: #ff6e84;
+	--outline: #78737f;
+	--outline-variant: #494651;
+	--font-headline: 'Manrope', sans-serif;
+	--font-body: 'Inter', sans-serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+	font-family: var(--font-body);
+	background-color: var(--bg);
+	background-image:
+		radial-gradient(circle at 0% 0%, rgba(163, 67, 231, 0.15) 0%, transparent 50%),
+		radial-gradient(circle at 100% 100%, rgba(211, 148, 255, 0.1) 0%, transparent 50%);
+	background-attachment: fixed;
+	color: var(--on-surface);
+	min-height: 100vh;
+	line-height: 1.5;
+}
+
+.material-symbols-outlined {
+	font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+	vertical-align: middle;
+}
+
+.glass-panel {
+	background: rgba(27, 24, 35, 0.6);
+	backdrop-filter: blur(30px);
+	-webkit-backdrop-filter: blur(30px);
+	border: 1px solid rgba(73, 70, 81, 0.2);
+	border-radius: 0.75rem;
+}
+
+a { color: var(--primary); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+input, select {
+	background: var(--surface-container-low);
+	border: 1px solid var(--outline-variant);
+	color: var(--on-surface);
+	padding: 0.5rem 0.75rem;
+	border-radius: 0.5rem;
+	font-family: var(--font-body);
+	font-size: 0.85rem;
+	outline: none;
+	transition: border-color 0.2s;
+}
+input:focus, select:focus {
+	border-color: var(--primary-dim);
+}
+
+button {
+	font-family: var(--font-body);
+	cursor: pointer;
+	border: none;
+	transition: all 0.2s;
+}
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(120, 115, 127, 0.3); border-radius: 10px; }
