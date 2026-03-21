@@ -20,6 +20,14 @@
 - [ ] Test network isolation iptables policies
 - [ ] Test snapshot pool warm boot
 
+## Real-time Dashboard Streaming
+
+- [ ] In-memory event bus (pub/sub) in Go server — publish on create/exec/destroy/expire
+- [ ] SSE endpoint: `GET /events?api_key=KEY` — streams sandbox lifecycle + health ticks
+- [ ] Replace SvelteKit polling with EventSource on dashboard, sandboxes, audit pages
+- [ ] Health tick every 5s over SSE (active count, host resource usage)
+- [ ] Keep WebSocket for exec streaming only (`GET /sandboxes/{id}/ws`)
+
 ## Pre-Public
 
 - [ ] Remove ssh root@homelab.local targets from Makefile
