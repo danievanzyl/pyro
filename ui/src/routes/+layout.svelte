@@ -1,6 +1,10 @@
 <script>
 	import '../app.css';
+	import { onMount } from 'svelte';
+	import { initAuth } from '$lib/auth.svelte.js';
 	let { children } = $props();
+
+	onMount(() => { initAuth(); });
 
 	const navItems = [
 		{ href: '/', icon: 'dashboard', label: 'Dashboard' },

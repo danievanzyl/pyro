@@ -1,6 +1,6 @@
 <script>
 	import { onMount } from 'svelte';
-	import { browser } from '$app/environment';
+	import { apiKey, getApiKey, setApiKey, apiFetch } from '$lib/auth.svelte.js';
 
 	let health = $state(null);
 	let sandboxes = $state([]);
@@ -8,12 +8,9 @@
 	let apiKeyInput = $state('');
 	let refreshInterval;
 
-	let apiKey = $state('');
-
 	function saveKey() {
 		if (apiKeyInput.trim()) {
-			localStorage.setItem('fclk_api_key', apiKeyInput.trim());
-			apiKey = apiKeyInput.trim();
+			setApiKey(apiKeyInput.trim());
 			fetchData();
 			connectSSE();
 		}
@@ -24,10 +21,8 @@
 			const healthRes = await fetch('/api/health');
 			health = await healthRes.json();
 
-			if (apiKey) {
-				const sbRes = await fetch('/api/sandboxes', {
-					headers: { 'Authorization': `Bearer ${apiKey}` }
-				});
+			if (getApiKey()) {
+				const sbRes = await apiFetch('/sandboxes');
 				if (sbRes.ok) sandboxes = await sbRes.json();
 			}
 			error = '';
@@ -55,30 +50,27 @@
 	let eventSource;
 
 	function connectSSE() {
-		if (!apiKey) return;
-		eventSource = new EventSource(`/api/events?api_key=${apiKey}`);
+		const key = getApiKey();
+		if (!key) return;
+		if (eventSource) eventSource.close();
+		eventSource = new EventSource(`/api/events?api_key=${key}`);
 		eventSource.addEventListener('health.tick', (e) => {
 			const data = JSON.parse(e.data);
 			if (health) health.active_sandboxes = data.data?.active_sandboxes ?? health.active_sandboxes;
 		});
 		eventSource.addEventListener('sandbox.created', () => fetchData());
 		eventSource.addEventListener('sandbox.destroyed', () => fetchData());
-		eventSource.addEventListener('sandbox.exec', () => {}); // no-op on dashboard
 		eventSource.onerror = () => {
-			// Fallback to polling on SSE failure.
 			if (!refreshInterval) refreshInterval = setInterval(fetchData, 5000);
 		};
 		eventSource.addEventListener('connected', () => {
-			// SSE connected — stop polling fallback.
 			if (refreshInterval) { clearInterval(refreshInterval); refreshInterval = null; }
 		});
 	}
 
 	onMount(() => {
-		apiKey = localStorage.getItem('fclk_api_key') || '';
 		fetchData();
 		connectSSE();
-		// Polling fallback until SSE connects.
 		refreshInterval = setInterval(fetchData, 5000);
 		return () => {
 			if (refreshInterval) clearInterval(refreshInterval);
@@ -107,7 +99,7 @@
 	</div>
 {/if}
 
-{#if !apiKey}
+{#if !apiKey()}
 	<div class="setup-card glass-panel">
 		<span class="material-symbols-outlined setup-icon">key</span>
 		<h3>Connect to your cluster</h3>
@@ -209,204 +201,48 @@
 {/if}
 
 <style>
-	.page-header {
-		display: flex;
-		align-items: flex-start;
-		justify-content: space-between;
-		margin-bottom: 2rem;
-	}
-	h1 {
-		font-family: var(--font-headline);
-		font-size: 1.75rem;
-		font-weight: 700;
-	}
-	.subtitle {
-		color: var(--on-surface-variant);
-		font-size: 0.85rem;
-		margin-top: 0.25rem;
-	}
-	.live-badge {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-		padding: 0.35rem 0.75rem;
-		border-radius: 9999px;
-		background: rgba(181, 255, 194, 0.1);
-		color: var(--tertiary);
-		font-size: 0.75rem;
-		font-weight: 600;
-		letter-spacing: 0.05em;
-	}
-	.live-dot {
-		width: 6px;
-		height: 6px;
-		border-radius: 50%;
-		background: var(--tertiary);
-		animation: pulse 2s infinite;
-	}
-	@keyframes pulse {
-		0%, 100% { opacity: 1; }
-		50% { opacity: 0.4; }
-	}
+	.page-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 2rem; }
+	h1 { font-family: var(--font-headline); font-size: 1.75rem; font-weight: 700; }
+	.subtitle { color: var(--on-surface-variant); font-size: 0.85rem; margin-top: 0.25rem; }
+	.live-badge { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.75rem; border-radius: 9999px; background: rgba(181, 255, 194, 0.1); color: var(--tertiary); font-size: 0.75rem; font-weight: 600; letter-spacing: 0.05em; }
+	.live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--tertiary); animation: pulse 2s infinite; }
+	@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
-	.error-banner {
-		display: flex;
-		align-items: center;
-		gap: 0.75rem;
-		padding: 0.75rem 1rem;
-		margin-bottom: 1.5rem;
-		color: var(--error);
-		font-size: 0.85rem;
-	}
+	.error-banner { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; margin-bottom: 1.5rem; color: var(--error); font-size: 0.85rem; }
 
-	.setup-card {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		padding: 3rem;
-		text-align: center;
-		gap: 0.75rem;
-	}
+	.setup-card { display: flex; flex-direction: column; align-items: center; padding: 3rem; text-align: center; gap: 0.75rem; }
 	.setup-icon { font-size: 2.5rem; color: var(--primary); }
-	.setup-card h3 {
-		font-family: var(--font-headline);
-		font-size: 1.1rem;
-	}
+	.setup-card h3 { font-family: var(--font-headline); font-size: 1.1rem; }
 	.setup-card p { color: var(--on-surface-variant); font-size: 0.85rem; }
-	.key-input-row {
-		display: flex;
-		gap: 0.5rem;
-		margin-top: 0.5rem;
-	}
+	.key-input-row { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
 	.key-input-row input { width: 320px; }
 
-	.btn-primary {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.4rem;
-		padding: 0.55rem 1.25rem;
-		border-radius: 0.75rem;
-		background: linear-gradient(135deg, var(--primary), var(--primary-dim));
-		color: #4a0076;
-		font-weight: 600;
-		font-size: 0.85rem;
-		text-decoration: none;
-	}
+	.btn-primary { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.55rem 1.25rem; border-radius: 0.75rem; background: linear-gradient(135deg, var(--primary), var(--primary-dim)); color: #4a0076; font-weight: 600; font-size: 0.85rem; text-decoration: none; }
 	.btn-primary:hover { opacity: 0.9; text-decoration: none; }
 
-	.metrics-grid {
-		display: grid;
-		grid-template-columns: repeat(4, 1fr);
-		gap: 1rem;
-		margin-bottom: 2rem;
-	}
-	.metric-card {
-		padding: 1.25rem;
-	}
-	.metric-label {
-		font-size: 0.7rem;
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
-		color: var(--on-surface-variant);
-		margin-bottom: 0.5rem;
-	}
-	.metric-value {
-		font-family: var(--font-headline);
-		font-size: 1.75rem;
-		font-weight: 800;
-		margin-bottom: 0.5rem;
-	}
-	.metric-sparkline {
-		display: flex;
-		align-items: center;
-		gap: 0.35rem;
-		font-size: 0.7rem;
-		color: var(--on-surface-variant);
-	}
+	.metrics-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 2rem; }
+	.metric-card { padding: 1.25rem; }
+	.metric-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--on-surface-variant); margin-bottom: 0.5rem; }
+	.metric-value { font-family: var(--font-headline); font-size: 1.75rem; font-weight: 800; margin-bottom: 0.5rem; }
+	.metric-sparkline { display: flex; align-items: center; gap: 0.35rem; font-size: 0.7rem; color: var(--on-surface-variant); }
 
-	.section-header {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		margin-bottom: 1rem;
-	}
-	h2 {
-		font-family: var(--font-headline);
-		font-size: 1.1rem;
-		font-weight: 600;
-	}
-	.view-all {
-		display: flex;
-		align-items: center;
-		gap: 0.25rem;
-		font-size: 0.8rem;
-		color: var(--primary);
-	}
+	.section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+	h2 { font-family: var(--font-headline); font-size: 1.1rem; font-weight: 600; }
+	.view-all { display: flex; align-items: center; gap: 0.25rem; font-size: 0.8rem; color: var(--primary); }
 
-	.vm-list {
-		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
-	}
-	.vm-row {
-		display: flex;
-		align-items: center;
-		gap: 1.25rem;
-		padding: 1rem 1.25rem;
-		transition: background 0.15s;
-	}
-	.vm-row:hover {
-		background: rgba(39, 36, 49, 0.8);
-	}
-	.status-dot {
-		width: 8px;
-		height: 8px;
-		border-radius: 50%;
-	}
+	.vm-list { display: flex; flex-direction: column; gap: 0.5rem; }
+	.vm-row { display: flex; align-items: center; gap: 1.25rem; padding: 1rem 1.25rem; transition: background 0.15s; }
+	.vm-row:hover { background: rgba(39, 36, 49, 0.8); }
+	.status-dot { width: 8px; height: 8px; border-radius: 50%; }
 	.vm-info { flex: 1; }
-	.vm-id {
-		font-family: var(--font-headline);
-		font-size: 0.9rem;
-		font-weight: 600;
-	}
-	.vm-meta {
-		font-size: 0.75rem;
-		color: var(--on-surface-variant);
-	}
-	.vm-stat {
-		text-align: right;
-		min-width: 80px;
-	}
-	.vm-stat-label {
-		font-size: 0.65rem;
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
-		color: var(--on-surface-variant);
-	}
-	.vm-stat-value {
-		font-size: 0.85rem;
-		font-weight: 600;
-	}
+	.vm-id { font-family: var(--font-headline); font-size: 0.9rem; font-weight: 600; }
+	.vm-meta { font-size: 0.75rem; color: var(--on-surface-variant); }
+	.vm-stat { text-align: right; min-width: 80px; }
+	.vm-stat-label { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--on-surface-variant); }
+	.vm-stat-value { font-size: 0.85rem; font-weight: 600; }
 
-	.empty-state {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		padding: 4rem;
-		text-align: center;
-		gap: 0.75rem;
-	}
-	.empty-icon {
-		font-size: 3rem;
-		color: var(--outline);
-	}
-	.empty-state h3 {
-		font-family: var(--font-headline);
-		font-size: 1.1rem;
-	}
-	.empty-state p {
-		color: var(--on-surface-variant);
-		font-size: 0.85rem;
-		margin-bottom: 0.5rem;
-	}
+	.empty-state { display: flex; flex-direction: column; align-items: center; padding: 4rem; text-align: center; gap: 0.75rem; }
+	.empty-icon { font-size: 3rem; color: var(--outline); }
+	.empty-state h3 { font-family: var(--font-headline); font-size: 1.1rem; }
+	.empty-state p { color: var(--on-surface-variant); font-size: 0.85rem; margin-bottom: 0.5rem; }
 </style>

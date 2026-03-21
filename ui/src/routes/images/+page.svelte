@@ -1,21 +1,18 @@
 <script>
 	import { onMount } from 'svelte';
+	import { apiFetch } from '$lib/auth.svelte.js';
 
 	let images = $state([]);
 	let error = $state('');
 
-	let apiKey = $state('');
-
 	async function refresh() {
 		try {
-			const res = await fetch('/api/images', {
-				headers: { 'Authorization': `Bearer ${apiKey}` }
-			});
+			const res = await apiFetch('/images');
 			if (res.ok) images = await res.json();
 		} catch (e) { error = e.message; }
 	}
 
-	onMount(() => { apiKey = localStorage.getItem('fclk_api_key') || ''; refresh(); });
+	onMount(refresh);
 
 	function formatSize(bytes) {
 		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;

@@ -1,20 +1,12 @@
 <script>
 	import { onMount } from 'svelte';
+	import { apiFetch } from '$lib/auth.svelte.js';
 
 	let sandboxes = $state([]);
 	let error = $state('');
 	let creating = $state(false);
 	let newTTL = $state(3600);
 	let newImage = $state('default');
-
-	let apiKey = $state('');
-
-	async function apiFetch(path, opts = {}) {
-		return fetch(`/api${path}`, {
-			...opts,
-			headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json', ...opts.headers }
-		});
-	}
 
 	async function refresh() {
 		try {
@@ -57,7 +49,7 @@
 		return 'var(--secondary)';
 	}
 
-	onMount(() => { apiKey = localStorage.getItem('fclk_api_key') || ''; refresh(); const i = setInterval(refresh, 3000); return () => clearInterval(i); });
+	onMount(() => { refresh(); const i = setInterval(refresh, 3000); return () => clearInterval(i); });
 </script>
 
 <div class="page-header">

@@ -1,22 +1,19 @@
 <script>
 	import { onMount } from 'svelte';
+	import { apiFetch } from '$lib/auth.svelte.js';
 
 	let entries = $state([]);
 	let error = $state('');
 	let severityFilter = $state('ALL');
 
-	let apiKey = $state('');
-
 	async function refresh() {
 		try {
-			const res = await fetch('/api/audit?limit=200', {
-				headers: { 'Authorization': `Bearer ${apiKey}` }
-			});
+			const res = await apiFetch('/audit?limit=200');
 			if (res.ok) entries = await res.json();
 		} catch (e) { error = e.message; }
 	}
 
-	onMount(() => { apiKey = localStorage.getItem('fclk_api_key') || ''; refresh(); const i = setInterval(refresh, 5000); return () => clearInterval(i); });
+	onMount(() => { refresh(); const i = setInterval(refresh, 5000); return () => clearInterval(i); });
 
 	function actionSeverity(action) {
 		if (action.includes('error') || action.includes('expired')) return 'ERROR';
