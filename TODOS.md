@@ -6,8 +6,17 @@
 - [x] Wire quota enforcement into POST /sandboxes handler
 - [x] Wire audit logging into sandbox lifecycle (create, exec, destroy)
 - [x] Add /audit and /images routes to server main.go
-- [ ] Wire audit logging into file ops (write, read) and TTL expiry in reaper
-- [ ] Embed SvelteKit static build into Go binary (serve UI from API server)
+- [x] Wire audit logging into file ops (write, read) and TTL expiry in reaper
+- [x] Embed SvelteKit static build into Go binary (serve UI from API server)
+
+## Real-time Dashboard Streaming
+
+- [x] In-memory event bus (pub/sub) in Go server — publish on create/exec/destroy/expire
+- [x] SSE endpoint: `GET /events?api_key=KEY` — streams sandbox lifecycle + health ticks
+- [x] Dashboard page uses EventSource with polling fallback
+- [x] Health tick every 5s over SSE (active count)
+- [x] Keep WebSocket for exec streaming only (`GET /sandboxes/{id}/ws`)
+- [ ] Add EventSource to sandboxes + audit pages (currently dashboard only)
 
 ## Testing on Homelab
 
@@ -15,18 +24,12 @@
 - [x] Test audit log populates on create/exec/destroy
 - [x] Test quota enforcement (exceed max-per-key, verify 429)
 - [x] Test TTL reaper auto-destroy (10s TTL sandbox → verified auto-destroyed)
+- [ ] Deploy + test embedded UI served from Go binary on :8080
+- [ ] Test SSE real-time events in dashboard
 - [ ] Test orphan recovery (kill server, restart, verify VM reclaimed or cleaned)
 - [ ] Test WebSocket streaming exec
 - [ ] Test network isolation iptables policies
 - [ ] Test snapshot pool warm boot
-
-## Real-time Dashboard Streaming
-
-- [ ] In-memory event bus (pub/sub) in Go server — publish on create/exec/destroy/expire
-- [ ] SSE endpoint: `GET /events?api_key=KEY` — streams sandbox lifecycle + health ticks
-- [ ] Replace SvelteKit polling with EventSource on dashboard, sandboxes, audit pages
-- [ ] Health tick every 5s over SSE (active count, host resource usage)
-- [ ] Keep WebSocket for exec streaming only (`GET /sandboxes/{id}/ws`)
 
 ## Pre-Public
 
@@ -40,4 +43,3 @@
 - [ ] Multi-host clustering (out of scope for v1)
 - [ ] GPU passthrough
 - [ ] Prometheus /metrics endpoint serving (OTEL provider is wired, needs HTTP handler)
-- [ ] Audit logging for file read/write operations

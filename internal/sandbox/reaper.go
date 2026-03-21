@@ -2,8 +2,11 @@ package sandbox
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/danievanzyl/firecrackerlacker/internal/store"
 )
 
 // Reaper periodically destroys sandboxes that have exceeded their TTL.
@@ -55,12 +58,20 @@ func (r *Reaper) tick(ctx context.Context) {
 	}
 
 	for _, sb := range expired {
+		overdue := time.Since(sb.ExpiresAt).Round(time.Second)
 		r.log.Info("reaping expired sandbox", "id", sb.ID,
-			"expired_at", sb.ExpiresAt,
-			"overdue", time.Since(sb.ExpiresAt).Round(time.Second))
+			"expired_at", sb.ExpiresAt, "overdue", overdue)
 
 		if err := r.manager.DestroySandbox(ctx, sb.ID); err != nil {
 			r.log.Error("reaper destroy failed", "id", sb.ID, "err", err)
+			continue
 		}
+
+		r.manager.store.LogAudit(ctx, &store.AuditEntry{
+			Action:    store.AuditSandboxExpired,
+			APIKeyID:  sb.APIKeyID,
+			SandboxID: sb.ID,
+			Detail:    fmt.Sprintf("overdue=%s", overdue),
+		})
 	}
 }

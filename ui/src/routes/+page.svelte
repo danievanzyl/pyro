@@ -15,6 +15,7 @@
 			localStorage.setItem('fclk_api_key', apiKeyInput.trim());
 			apiKey = apiKeyInput.trim();
 			fetchData();
+			connectSSE();
 		}
 	}
 
@@ -51,11 +52,38 @@
 		return 'var(--on-surface-variant)';
 	}
 
+	let eventSource;
+
+	function connectSSE() {
+		if (!apiKey) return;
+		eventSource = new EventSource(`/api/events?api_key=${apiKey}`);
+		eventSource.addEventListener('health.tick', (e) => {
+			const data = JSON.parse(e.data);
+			if (health) health.active_sandboxes = data.data?.active_sandboxes ?? health.active_sandboxes;
+		});
+		eventSource.addEventListener('sandbox.created', () => fetchData());
+		eventSource.addEventListener('sandbox.destroyed', () => fetchData());
+		eventSource.addEventListener('sandbox.exec', () => {}); // no-op on dashboard
+		eventSource.onerror = () => {
+			// Fallback to polling on SSE failure.
+			if (!refreshInterval) refreshInterval = setInterval(fetchData, 5000);
+		};
+		eventSource.addEventListener('connected', () => {
+			// SSE connected — stop polling fallback.
+			if (refreshInterval) { clearInterval(refreshInterval); refreshInterval = null; }
+		});
+	}
+
 	onMount(() => {
 		apiKey = localStorage.getItem('fclk_api_key') || '';
 		fetchData();
-		refreshInterval = setInterval(fetchData, 3000);
-		return () => clearInterval(refreshInterval);
+		connectSSE();
+		// Polling fallback until SSE connects.
+		refreshInterval = setInterval(fetchData, 5000);
+		return () => {
+			if (refreshInterval) clearInterval(refreshInterval);
+			if (eventSource) eventSource.close();
+		};
 	});
 </script>
 

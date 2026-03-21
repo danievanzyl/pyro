@@ -3,10 +3,13 @@ REMOTE_DIR := /opt/firecrackerlacker
 
 .PHONY: build build-server build-agent build-fcctl test test-unit clean deploy deploy-bin deploy-agent deploy-service deploy-rootfs test-integration ssh
 
-# Build all binaries
-build: build-server build-agent build-fcctl
+# Build all binaries (UI must be built before server for embed)
+build: build-ui build-server build-agent build-fcctl
 
-build-server:
+build-ui:
+	cd ui && bun run build
+
+build-server: build-ui
 	go build -o bin/firecrackerlacker-server ./cmd/server
 
 # Agent must be cross-compiled for Linux (runs inside Firecracker VM)
@@ -25,7 +28,7 @@ test:
 	go test -v ./...
 
 # Cross-compile everything for Linux (for deployment to KVM host)
-build-linux:
+build-linux: build-ui
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/linux/firecrackerlacker-server ./cmd/server
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/linux/fc-agent ./cmd/agent
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/linux/fcctl ./cmd/fcctl

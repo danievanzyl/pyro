@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -23,6 +24,8 @@ type ServerConfig struct {
 	Metrics  *observability.Metrics
 	Quota    *QuotaEnforcer
 	ImageMgr *sandbox.ImageManager
+	UIFS     fs.FS // embedded SvelteKit build
+	EventBus *EventBus
 }
 
 // Server is the HTTP API server.
@@ -34,6 +37,8 @@ type Server struct {
 	metrics  *observability.Metrics
 	quota    *QuotaEnforcer
 	imageMgr *sandbox.ImageManager
+	uiFS     fs.FS
+	eventBus *EventBus
 }
 
 // NewServer creates an API server.
@@ -47,6 +52,8 @@ func NewServer(manager *sandbox.Manager, st *store.Store, log *slog.Logger, cfg 
 		s.metrics = cfg.Metrics
 		s.quota = cfg.Quota
 		s.imageMgr = cfg.ImageMgr
+		s.uiFS = cfg.UIFS
+		s.eventBus = cfg.EventBus
 	}
 	s.setupRoutes()
 	return s
@@ -93,6 +100,16 @@ func (s *Server) setupRoutes() {
 
 	// WebSocket routes (auth via query param, not middleware).
 	SetupWebSocketRoutes(r, s.manager, s.store, s.log)
+
+	// SSE event stream (auth via query param).
+	if s.eventBus != nil {
+		SetupSSERoutes(r, s.eventBus, s.store, s.log)
+	}
+
+	// Embedded UI (must be last — catch-all for SPA routing).
+	if s.uiFS != nil {
+		SetupUIRoutes(r, s.uiFS)
+	}
 
 	s.router = r
 }
@@ -159,13 +176,14 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 		s.metrics.RecordSandboxCreated(r.Context(), image, time.Since(start))
 	}
 
-	// Audit log.
+	// Audit log + SSE event.
 	s.store.LogAudit(r.Context(), &store.AuditEntry{
 		Action:    store.AuditSandboxCreated,
 		APIKeyID:  ak.ID,
 		SandboxID: sb.ID,
 		Detail:    fmt.Sprintf("image=%s ttl=%ds", image, req.TTL),
 	})
+	s.publishEvent("sandbox.created", sb)
 
 	writeJSON(w, http.StatusCreated, sb)
 }
@@ -240,6 +258,7 @@ func (s *Server) handleDeleteSandbox(w http.ResponseWriter, r *http.Request) {
 	s.store.LogAudit(r.Context(), &store.AuditEntry{
 		Action: store.AuditSandboxDestroyed, APIKeyID: ak.ID, SandboxID: id, Detail: "reason=manual",
 	})
+	s.publishEvent("sandbox.destroyed", map[string]string{"id": id, "reason": "manual"})
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -312,6 +331,7 @@ func (s *Server) handleExecInSandbox(w http.ResponseWriter, r *http.Request) {
 		Action: store.AuditSandboxExec, APIKeyID: ak.ID, SandboxID: id,
 		Detail: fmt.Sprintf("cmd=%s exit=%d", strings.Join(req.Command, " "), resp.ExitCode),
 	})
+	s.publishEvent("sandbox.exec", map[string]any{"sandbox_id": id, "exit_code": resp.ExitCode})
 
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -354,6 +374,12 @@ func (s *Server) handleFileWrite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ak := APIKeyFromContext(r.Context())
+	s.store.LogAudit(r.Context(), &store.AuditEntry{
+		Action: store.AuditSandboxFileWrite, APIKeyID: ak.ID, SandboxID: id,
+		Detail: fmt.Sprintf("path=%s bytes=%d", filePath, resp.BytesWritten),
+	})
+
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -378,6 +404,12 @@ func (s *Server) handleFileRead(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "decode content"})
 		return
 	}
+
+	ak := APIKeyFromContext(r.Context())
+	s.store.LogAudit(r.Context(), &store.AuditEntry{
+		Action: store.AuditSandboxFileRead, APIKeyID: ak.ID, SandboxID: id,
+		Detail: fmt.Sprintf("path=%s size=%d", filePath, resp.Size),
+	})
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("X-File-Mode", fmt.Sprintf("%o", resp.Mode))
@@ -421,4 +453,10 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func isCapacityError(err error) bool {
 	return err != nil && len(err.Error()) > 11 && err.Error()[:11] == "at capacity"
+}
+
+func (s *Server) publishEvent(eventType string, data any) {
+	if s.eventBus != nil {
+		s.eventBus.Publish(eventType, data)
+	}
 }

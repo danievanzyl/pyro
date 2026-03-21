@@ -14,6 +14,7 @@ package main
 import (
 	"context"
 	"flag"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	firecrackerlacker "github.com/danievanzyl/firecrackerlacker"
 	"github.com/danievanzyl/firecrackerlacker/internal/api"
 	"github.com/danievanzyl/firecrackerlacker/internal/observability"
 	"github.com/danievanzyl/firecrackerlacker/internal/sandbox"
@@ -114,11 +116,38 @@ func main() {
 	reaper := sandbox.NewReaper(mgr, *reaperInterval, log)
 	go reaper.Run(reaperCtx)
 
+	// Embedded UI.
+	uiFS, err := fs.Sub(firecrackerlacker.UIBuild, "ui/build")
+	if err != nil {
+		log.Warn("ui embed not available", "err", err)
+	}
+
+	// Event bus for SSE streaming.
+	eventBus := api.NewEventBus()
+
+	// Health tick — publish active count every 5s over SSE.
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-reaperCtx.Done():
+				return
+			case <-ticker.C:
+				eventBus.Publish("health.tick", map[string]any{
+					"active_sandboxes": mgr.ActiveCount(),
+				})
+			}
+		}
+	}()
+
 	// Start API server.
 	srv := api.NewServer(mgr, st, log, &api.ServerConfig{
 		Metrics:  metrics,
 		Quota:    quota,
 		ImageMgr: imgMgr,
+		UIFS:     uiFS,
+		EventBus: eventBus,
 	})
 	httpServer := &http.Server{
 		Addr:         *listenAddr,
