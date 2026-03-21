@@ -85,9 +85,8 @@ func (qe *QuotaEnforcer) CheckCreateQuota(ctx context.Context, apiKeyID string, 
 }
 
 // checkRate implements a simple fixed-window rate limiter.
+// Caller must hold qe.mu.
 func (qe *QuotaEnforcer) checkRate(apiKeyID string) bool {
-	qe.mu.Lock()
-	defer qe.mu.Unlock()
 
 	now := time.Now()
 	window, ok := qe.rateCounts[apiKeyID]

@@ -259,7 +259,7 @@ func (p *Pool) createSnapshot(ctx context.Context, image string) (*snapshot, err
 	agentReady := make(chan error, 1)
 	go func() {
 		// Simple vsock ping loop.
-		deadline := time.Now().Add(30 * time.Second)
+		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
 			time.Sleep(200 * time.Millisecond)
 			conn, err := p.manager.dialVsock(cid, p.manager.cfg.VsockAgentPort)

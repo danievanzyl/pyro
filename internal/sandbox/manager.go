@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -23,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/KarpelesLab/reflink"
 	"github.com/danievanzyl/firecrackerlacker/internal/protocol"
 	"github.com/danievanzyl/firecrackerlacker/internal/store"
 	"github.com/google/uuid"
@@ -111,6 +113,7 @@ func (m *Manager) ActiveCount() int {
 
 // CreateSandbox provisions a new Firecracker microVM.
 func (m *Manager) CreateSandbox(ctx context.Context, apiKeyID, image string, ttl time.Duration) (*store.Sandbox, error) {
+	createStart := time.Now()
 	if m.ActiveCount() >= m.cfg.MaxSandboxes {
 		return nil, fmt.Errorf("at capacity: %d/%d sandboxes running", m.ActiveCount(), m.cfg.MaxSandboxes)
 	}
@@ -145,12 +148,16 @@ func (m *Manager) CreateSandbox(ctx context.Context, apiKeyID, image string, ttl
 		return nil, fmt.Errorf("store sandbox: %w", err)
 	}
 
+	m.log.Info("create: db done", "id", id[:8], "elapsed", time.Since(createStart))
+
 	// Create tap device and attach to bridge.
 	if err := m.setupNetworking(tapDevice); err != nil {
 		m.store.UpdateSandboxState(ctx, id, store.StateDestroyed)
 		os.RemoveAll(stateDir)
 		return nil, fmt.Errorf("setup networking: %w", err)
 	}
+
+	m.log.Info("create: network done", "id", id[:8], "elapsed", time.Since(createStart))
 
 	// Copy rootfs for this sandbox (each VM needs its own writable copy).
 	rootfsPath := filepath.Join(stateDir, "rootfs.ext4")
@@ -160,6 +167,8 @@ func (m *Manager) CreateSandbox(ctx context.Context, apiKeyID, image string, ttl
 		os.RemoveAll(stateDir)
 		return nil, fmt.Errorf("copy rootfs: %w", err)
 	}
+
+	m.log.Info("create: rootfs copied", "id", id[:8], "elapsed", time.Since(createStart))
 
 	// Spawn Firecracker via jailer.
 	vmCtx, vmCancel := context.WithCancel(context.Background())
@@ -181,8 +190,10 @@ func (m *Manager) CreateSandbox(ctx context.Context, apiKeyID, image string, ttl
 		return nil, fmt.Errorf("update sandbox pid: %w", err)
 	}
 
+	m.log.Info("create: firecracker spawned", "id", id[:8], "pid", cmd.Process.Pid, "elapsed", time.Since(createStart))
+
 	// Wait for vsock agent to become ready.
-	if err := m.waitForAgent(sb, 30*time.Second); err != nil {
+	if err := m.waitForAgent(sb, 5*time.Second); err != nil {
 		vmCancel()
 		m.killProcess(cmd)
 		m.cleanupNetworking(tapDevice)
@@ -587,10 +598,25 @@ func runCmd(name string, args ...string) error {
 	return nil
 }
 
+// copyFile copies src to dst using the fastest available method:
+// 1. reflink (FICLONE ioctl) — O(1) on CoW filesystems (btrfs, xfs reflink=1)
+// 2. copy_file_range — kernel-space copy via page cache
+// 3. io.Copy — userspace fallback via sendfile(2)
 func copyFile(src, dst string) error {
-	data, err := os.ReadFile(src)
+	if err := reflink.Auto(src, dst); err == nil {
+		return os.Chmod(dst, 0640)
+	}
+	// Fallback to streaming kernel-space copy.
+	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, 0640)
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
 }

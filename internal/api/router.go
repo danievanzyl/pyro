@@ -73,38 +73,44 @@ func (s *Server) setupRoutes() {
 		r.Use(MetricsMiddleware(s.metrics))
 	}
 
-	// Health check (unauthenticated).
-	r.Get("/health", s.handleHealth)
+	// All API routes under /api/ prefix.
+	r.Route("/api", func(r chi.Router) {
+		// Health check (unauthenticated).
+		r.Get("/health", s.handleHealth)
 
-	// Authenticated routes.
-	r.Group(func(r chi.Router) {
-		r.Use(AuthMiddleware(s.store))
+		// Authenticated routes.
+		r.Group(func(r chi.Router) {
+			r.Use(AuthMiddleware(s.store))
 
-		r.Post("/sandboxes", s.handleCreateSandbox)
-		r.Get("/sandboxes", s.handleListSandboxes)
-		r.Get("/sandboxes/{id}", s.handleGetSandbox)
-		r.Delete("/sandboxes/{id}", s.handleDeleteSandbox)
-		r.Post("/sandboxes/{id}/exec", s.handleExecInSandbox)
-		r.Put("/sandboxes/{id}/files/*", s.handleFileWrite)
-		r.Get("/sandboxes/{id}/files/*", s.handleFileRead)
-	})
+			r.Post("/sandboxes", s.handleCreateSandbox)
+			r.Get("/sandboxes", s.handleListSandboxes)
+			r.Get("/sandboxes/{id}", s.handleGetSandbox)
+			r.Delete("/sandboxes/{id}", s.handleDeleteSandbox)
+			r.Post("/sandboxes/{id}/exec", s.handleExecInSandbox)
+			r.Put("/sandboxes/{id}/files/*", s.handleFileWrite)
+			r.Get("/sandboxes/{id}/files/*", s.handleFileRead)
+		})
 
-	// Authenticated image + audit routes.
-	r.Group(func(r chi.Router) {
-		r.Use(AuthMiddleware(s.store))
-		if s.imageMgr != nil {
-			SetupImageRoutes(r, s.imageMgr)
+		// Authenticated image + audit routes.
+		r.Group(func(r chi.Router) {
+			r.Use(AuthMiddleware(s.store))
+			if s.imageMgr != nil {
+				SetupImageRoutes(r, s.imageMgr)
+			}
+			SetupAuditRoutes(r, s.store)
+		})
+
+		// WebSocket routes (auth via query param, not middleware).
+		SetupWebSocketRoutes(r, s.manager, s.store, s.log)
+
+		// SSE event stream (auth via query param).
+		if s.eventBus != nil {
+			SetupSSERoutes(r, s.eventBus, s.store, s.log)
 		}
-		SetupAuditRoutes(r, s.store)
 	})
 
-	// WebSocket routes (auth via query param, not middleware).
-	SetupWebSocketRoutes(r, s.manager, s.store, s.log)
-
-	// SSE event stream (auth via query param).
-	if s.eventBus != nil {
-		SetupSSERoutes(r, s.eventBus, s.store, s.log)
-	}
+	// Backward compat: /health without /api prefix.
+	r.Get("/health", s.handleHealth)
 
 	// Embedded UI (must be last — catch-all for SPA routing).
 	if s.uiFS != nil {
