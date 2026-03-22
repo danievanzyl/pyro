@@ -1,5 +1,6 @@
 <script>
 	import { onMount } from 'svelte';
+	import { afterNavigate } from '$app/navigation';
 	import { apiFetch } from '$lib/auth.svelte.js';
 
 	let sandboxes = $state([]);
@@ -50,6 +51,7 @@
 	}
 
 	onMount(() => { refresh(); const i = setInterval(refresh, 3000); return () => clearInterval(i); });
+	afterNavigate(() => { refresh(); });
 </script>
 
 <div class="page-header">

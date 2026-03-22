@@ -1,5 +1,6 @@
 <script>
 	import '../app.css';
+	import { afterNavigate } from '$app/navigation';
 	let { children } = $props();
 
 	const navItems = [
@@ -11,12 +12,10 @@
 
 	let currentPath = $state('/');
 
-	function navigate(path) {
-		currentPath = path;
-	}
+	afterNavigate(() => {
+		if (typeof window !== 'undefined') currentPath = window.location.pathname;
+	});
 </script>
-
-<svelte:window onpopstate={() => { if (typeof window !== 'undefined') currentPath = window.location.pathname; }} />
 
 <div class="shell">
 	<aside class="sidebar glass-panel">
@@ -34,8 +33,7 @@
 					href={item.href}
 					class="nav-item"
 					class:active={currentPath === item.href}
-					onclick={() => navigate(item.href)}
-				>
+					>
 					<span class="material-symbols-outlined">{item.icon}</span>
 					{item.label}
 				</a>
@@ -44,10 +42,10 @@
 
 		<div class="nav-spacer"></div>
 
-		<button class="provision-btn" onclick={() => { currentPath = '/sandboxes'; window.location.href = '/sandboxes'; }}>
+		<a href="/sandboxes" class="provision-btn">
 			<span class="material-symbols-outlined">add</span>
 			Provision VM
-		</button>
+		</a>
 
 		<nav class="nav-secondary">
 			<a href="https://github.com/danievanzyl/firecrackerlacker" class="nav-item" target="_blank">

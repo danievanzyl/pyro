@@ -154,9 +154,9 @@ func main() {
 	httpServer := &http.Server{
 		Addr:         *listenAddr,
 		Handler:      srv.Handler(),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 600 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second, // headers only — SSE/WS need long-lived conns
+		WriteTimeout:      0,                // disabled — SSE streams indefinitely
+		IdleTimeout:       120 * time.Second,
 	}
 
 	go func() {

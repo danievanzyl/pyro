@@ -1,5 +1,6 @@
 <script>
 	import { onMount } from 'svelte';
+	import { afterNavigate } from '$app/navigation';
 	import { apiFetch } from '$lib/auth.svelte.js';
 
 	let entries = $state([]);
@@ -14,6 +15,7 @@
 	}
 
 	onMount(() => { refresh(); const i = setInterval(refresh, 5000); return () => clearInterval(i); });
+	afterNavigate(() => { refresh(); });
 
 	function actionSeverity(action) {
 		if (action.includes('error') || action.includes('expired')) return 'ERROR';

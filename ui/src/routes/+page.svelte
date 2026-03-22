@@ -1,5 +1,6 @@
 <script>
 	import { onMount } from 'svelte';
+	import { afterNavigate } from '$app/navigation';
 	import { hasApiKey, getApiKey, setApiKey, apiFetch } from '$lib/auth.svelte.js';
 
 	let health = $state(null);
@@ -50,34 +51,45 @@
 	}
 
 	let eventSource;
+	let sseRetries = 0;
 
 	function connectSSE() {
 		const key = getApiKey();
-		if (!key) return;
-		if (eventSource) eventSource.close();
+		if (!key || sseRetries > 3) return;
+		if (eventSource) { eventSource.close(); eventSource = null; }
+
 		eventSource = new EventSource(`/api/events?api_key=${key}`);
 		eventSource.addEventListener('health.tick', (e) => {
-			const data = JSON.parse(e.data);
-			if (health) health.active_sandboxes = data.data?.active_sandboxes ?? health.active_sandboxes;
+			try {
+				const data = JSON.parse(e.data);
+				if (health) health.active_sandboxes = data.data?.active_sandboxes ?? health.active_sandboxes;
+			} catch {}
 		});
 		eventSource.addEventListener('sandbox.created', () => fetchData());
 		eventSource.addEventListener('sandbox.destroyed', () => fetchData());
+		eventSource.addEventListener('connected', () => { sseRetries = 0; });
 		eventSource.onerror = () => {
-			if (!refreshInterval) refreshInterval = setInterval(fetchData, 5000);
+			sseRetries++;
+			if (eventSource) { eventSource.close(); eventSource = null; }
+			// Don't retry aggressively — polling covers us.
 		};
-		eventSource.addEventListener('connected', () => {
-			if (refreshInterval) { clearInterval(refreshInterval); refreshInterval = null; }
-		});
 	}
 
 	onMount(() => {
 		fetchData();
 		connectSSE();
+		// Always poll — SSE is a bonus, not required.
 		refreshInterval = setInterval(fetchData, 5000);
 		return () => {
 			if (refreshInterval) clearInterval(refreshInterval);
-			if (eventSource) eventSource.close();
+			if (eventSource) { eventSource.close(); eventSource = null; }
 		};
+	});
+
+	// Re-fetch on client-side navigation back to this page.
+	afterNavigate(() => {
+		authenticated = hasApiKey();
+		fetchData();
 	});
 </script>
 

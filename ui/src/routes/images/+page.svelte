@@ -1,5 +1,6 @@
 <script>
 	import { onMount } from 'svelte';
+	import { afterNavigate } from '$app/navigation';
 	import { apiFetch } from '$lib/auth.svelte.js';
 
 	let images = $state([]);
@@ -13,6 +14,7 @@
 	}
 
 	onMount(refresh);
+	afterNavigate(() => { refresh(); });
 
 	function formatSize(bytes) {
 		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
