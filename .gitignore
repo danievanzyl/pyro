@@ -10,3 +10,5 @@ ui/bun.lock
 *.png
 .playwright-mcp/
 .gstack/
+*.png
+.playwright-mcp/

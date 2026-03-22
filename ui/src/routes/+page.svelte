@@ -1,6 +1,4 @@
 <script>
-	import { onMount } from 'svelte';
-	import { afterNavigate } from '$app/navigation';
 	import { hasApiKey, getApiKey, setApiKey, apiFetch } from '$lib/auth.svelte.js';
 
 	let health = $state(null);
@@ -75,22 +73,11 @@
 		};
 	}
 
-	onMount(() => {
-		fetchData();
-		connectSSE();
-		// Always poll — SSE is a bonus, not required.
-		refreshInterval = setInterval(fetchData, 5000);
-		return () => {
-			if (refreshInterval) clearInterval(refreshInterval);
-			if (eventSource) { eventSource.close(); eventSource = null; }
-		};
-	});
-
-	// Re-fetch on client-side navigation back to this page.
-	afterNavigate(() => {
-		authenticated = hasApiKey();
-		fetchData();
-	});
+	// Fetch data on component init + poll every 5s.
+	// Using direct calls instead of onMount to ensure Svelte 5 doesn't tree-shake.
+	fetchData();
+	connectSSE();
+	refreshInterval = setInterval(fetchData, 5000);
 </script>
 
 <div class="page-header">
