@@ -667,11 +667,23 @@ func (m *Manager) cleanupNetworking(tapDevice string) {
 	runCmd("ip", "tuntap", "del", tapDevice, "mode", "tap")
 }
 
-// killProcess sends SIGKILL and reaps a Firecracker process.
+// killProcess sends SIGKILL and reaps a Firecracker process with a timeout.
 func (m *Manager) killProcess(cmd *exec.Cmd) {
-	if cmd != nil && cmd.Process != nil {
-		cmd.Process.Kill()
-		cmd.Wait() // reap zombie
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	cmd.Process.Kill()
+
+	// Reap with timeout — don't block the HTTP handler if the process is slow to die.
+	done := make(chan struct{})
+	go func() {
+		cmd.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		m.log.Warn("process reap timed out, continuing cleanup", "pid", cmd.Process.Pid)
 	}
 }
 
