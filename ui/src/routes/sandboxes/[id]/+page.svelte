@@ -81,10 +81,18 @@
 		return `${mins}m`;
 	}
 
-	fetchSandbox();
-	setInterval(fetchSandbox, 5000);
-	// Connect WS after first fetch
-	setTimeout(() => { if (sandbox?.state === 'running') connectWS(); }, 2000);
+	let pollInterval = null;
+
+	async function init() {
+		await fetchSandbox();
+		if (sandbox?.state === 'running' && wsStatus === 'disconnected') connectWS();
+		pollInterval = setInterval(async () => {
+			await fetchSandbox();
+			if (sandbox?.state === 'running' && wsStatus === 'disconnected' && !ws) connectWS();
+		}, 5000);
+	}
+
+	if (typeof window !== 'undefined') init();
 </script>
 
 {#if error}
