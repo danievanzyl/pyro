@@ -1,13 +1,15 @@
-# firecrackerlacker
+# Pyro
 
-Ephemeral Firecracker microVM sandbox platform for agentic workloads.
+Open-source Firecracker microVM sandbox platform for AI agents.
 
 ## Architecture
 
-- Go monorepo: `cmd/server` (API), `cmd/agent` (in-VM vsock agent), `cmd/fcctl` (CLI)
+- Go monorepo: `cmd/server` (API), `cmd/agent` (in-VM vsock agent), `cmd/pyro` (CLI)
 - `internal/` packages: api, sandbox, protocol, store
 - SQLite for state, vsock for host↔guest communication
 - JSON-over-length-prefix wire protocol
+- Python SDK: `sdk/python/` — `pyro-sdk` on PyPI
+- TypeScript SDK: `sdk/typescript/` — `@pyrovm/sdk` on npm
 
 ## Build
 
@@ -24,6 +26,8 @@ make test           # full tests (requires Linux + KVM)
 - Agent must be cross-compiled: `CGO_ENABLED=0 GOOS=linux GOARCH=amd64`
 - vsock only works on Linux — macOS builds use stubs
 - Integration tests require a KVM host with Firecracker installed
+- API key prefix: `pk_` (pyro key)
+- Env vars: `PYRO_API_KEY`, `PYRO_BASE_URL`
 
 ## API Endpoints
 
@@ -50,10 +54,11 @@ make test           # full tests (requires Linux + KVM)
 
 ## Security Notes
 
-- SSE and WebSocket endpoints pass API keys via query param (can't set headers). Scrub `api_key=` from access logs in production (nginx: `map` directive, or log format that omits query strings).
+- SSE and WebSocket endpoints pass API keys via query param (can't set headers). Scrub `api_key=` from access logs in production.
 
 ## Phases
 
 - Phase 1 (done): Core sandbox API, auth, TTL reaper, vsock exec
 - Phase 2 (done): Snapshot pools, file API, WebSocket streaming, image mgmt
 - Phase 3 (done): OTEL metrics, SvelteKit dashboard, network policies, quotas, audit log
+- Phase 4 (current): Rebrand to Pyro, Python + TypeScript SDKs, examples, docs

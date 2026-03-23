@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/danievanzyl/firecrackerlacker/internal/sandbox"
+	"github.com/danievanzyl/pyro/internal/sandbox"
 	"github.com/go-chi/chi/v5"
 )
 

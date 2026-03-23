@@ -25,8 +25,8 @@ import (
 	"time"
 
 	"github.com/KarpelesLab/reflink"
-	"github.com/danievanzyl/firecrackerlacker/internal/protocol"
-	"github.com/danievanzyl/firecrackerlacker/internal/store"
+	"github.com/danievanzyl/pyro/internal/protocol"
+	"github.com/danievanzyl/pyro/internal/store"
 	"github.com/google/uuid"
 )
 
@@ -479,7 +479,7 @@ func (m *Manager) spawnFirecracker(ctx context.Context, sb *store.Sandbox, rootf
 	config := fmt.Sprintf(`{
   "boot-source": {
     "kernel_image_path": %q,
-    "boot_args": "console=ttyS0 reboot=k panic=1 pci=off init=/usr/bin/fc-agent"
+    "boot_args": "console=ttyS0 reboot=k panic=1 pci=off init=/usr/bin/pyro-agent"
   },
   "drives": [{
     "drive_id": "rootfs",

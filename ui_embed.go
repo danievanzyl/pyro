@@ -1,4 +1,4 @@
-package firecrackerlacker
+package pyro
 
 import "embed"
 

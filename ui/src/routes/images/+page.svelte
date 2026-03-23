@@ -73,7 +73,7 @@
 		<span class="material-symbols-outlined">inventory_2</span>
 		<h3>No images built</h3>
 		<p>Build images with the CLI</p>
-		<code class="mono cmd">fcctl build-image ubuntu</code>
+		<code class="mono cmd">pyro build-image ubuntu</code>
 	</div>
 {/if}
 

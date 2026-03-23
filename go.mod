@@ -1,4 +1,4 @@
-module github.com/danievanzyl/firecrackerlacker
+module github.com/danievanzyl/pyro
 
 go 1.25.0
 

@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/danievanzyl/firecrackerlacker/internal/store"
+	"github.com/danievanzyl/pyro/internal/store"
 )
 
 // Reaper periodically destroys sandboxes that have exceeded their TTL.

@@ -1,4 +1,4 @@
-// Command agent is the in-VM vsock agent for firecrackerlacker.
+// Command agent is the in-VM vsock agent for Pyro.
 //
 // It runs inside each Firecracker microVM as PID 1 (or spawned by init).
 // Listens on vsock port 1024 for commands from the host API server.
@@ -26,7 +26,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/danievanzyl/firecrackerlacker/internal/protocol"
+	"github.com/danievanzyl/pyro/internal/protocol"
 )
 
 const (

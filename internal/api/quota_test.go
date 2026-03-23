@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danievanzyl/firecrackerlacker/internal/store"
+	"github.com/danievanzyl/pyro/internal/store"
 )
 
 func TestQuotaEnforcerTTLLimit(t *testing.T) {

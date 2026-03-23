@@ -14,7 +14,7 @@ func initAsInit() {
 	syscall.Mount("devtmpfs", "/dev", "devtmpfs", 0, "")
 	os.MkdirAll("/dev/pts", 0755)
 	syscall.Mount("devpts", "/dev/pts", "devpts", 0, "")
-	syscall.Sethostname([]byte("firecrackerlacker"))
+	syscall.Sethostname([]byte("pyro"))
 
 	// Set PATH so commands work without full paths.
 	os.Setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")

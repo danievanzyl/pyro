@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/danievanzyl/firecrackerlacker/internal/protocol"
-	"github.com/danievanzyl/firecrackerlacker/internal/sandbox"
-	"github.com/danievanzyl/firecrackerlacker/internal/store"
+	"github.com/danievanzyl/pyro/internal/protocol"
+	"github.com/danievanzyl/pyro/internal/sandbox"
+	"github.com/danievanzyl/pyro/internal/store"
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
 )

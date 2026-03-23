@@ -1,4 +1,4 @@
-// Command server is the firecrackerlacker API server.
+// Command server is the Pyro API server.
 //
 // Manages Firecracker microVM sandboxes for agentic workloads:
 // - REST API for sandbox lifecycle (create, exec, destroy, files)
@@ -22,23 +22,23 @@ import (
 	"syscall"
 	"time"
 
-	firecrackerlacker "github.com/danievanzyl/firecrackerlacker"
-	"github.com/danievanzyl/firecrackerlacker/internal/api"
-	"github.com/danievanzyl/firecrackerlacker/internal/observability"
-	"github.com/danievanzyl/firecrackerlacker/internal/sandbox"
-	"github.com/danievanzyl/firecrackerlacker/internal/store"
+	pyro "github.com/danievanzyl/pyro"
+	"github.com/danievanzyl/pyro/internal/api"
+	"github.com/danievanzyl/pyro/internal/observability"
+	"github.com/danievanzyl/pyro/internal/sandbox"
+	"github.com/danievanzyl/pyro/internal/store"
 )
 
 func main() {
 	var (
 		listenAddr     = flag.String("listen", ":8080", "API server listen address")
-		dbPath         = flag.String("db", "/var/lib/firecrackerlacker/firecrackerlacker.db", "SQLite database path")
-		stateDir       = flag.String("state-dir", "/var/lib/firecrackerlacker/vms", "VM state directory")
-		imagesDir      = flag.String("images-dir", "/var/lib/firecrackerlacker/images", "Base images directory")
+		dbPath         = flag.String("db", "/var/lib/pyro/pyro.db", "SQLite database path")
+		stateDir       = flag.String("state-dir", "/var/lib/pyro/vms", "VM state directory")
+		imagesDir      = flag.String("images-dir", "/var/lib/pyro/images", "Base images directory")
 		firecrackerBin = flag.String("firecracker", "/usr/bin/firecracker", "Firecracker binary path")
 		jailerBin      = flag.String("jailer", "/usr/bin/jailer", "Jailer binary path")
-		kernelPath     = flag.String("kernel", "/var/lib/firecrackerlacker/images/vmlinux", "Guest kernel path")
-		rootfsPath     = flag.String("rootfs", "/var/lib/firecrackerlacker/images/rootfs.ext4", "Default rootfs path")
+		kernelPath     = flag.String("kernel", "/var/lib/pyro/images/vmlinux", "Guest kernel path")
+		rootfsPath     = flag.String("rootfs", "/var/lib/pyro/images/rootfs.ext4", "Default rootfs path")
 		bridgeName     = flag.String("bridge", "fcbr0", "Network bridge name")
 		maxSandboxes   = flag.Int("max-sandboxes", 100, "Maximum concurrent sandboxes")
 		reaperInterval = flag.Duration("reaper-interval", 5*time.Second, "TTL reaper check interval")
@@ -52,7 +52,7 @@ func main() {
 		defaultVCPU    = flag.Int("default-vcpu", 1, "Default vCPUs per sandbox")
 		defaultMemMiB  = flag.Int("default-mem-mib", 256, "Default memory per sandbox (MiB)")
 		poolSize       = flag.Int("pool-size", 0, "Snapshot pool size per image (0 = disabled)")
-		snapshotDir    = flag.String("snapshot-dir", "/var/lib/firecrackerlacker/snapshots", "Snapshot pool directory")
+		snapshotDir    = flag.String("snapshot-dir", "/var/lib/pyro/snapshots", "Snapshot pool directory")
 	)
 	flag.Parse()
 
@@ -69,7 +69,7 @@ func main() {
 
 	// Setup OTEL metrics.
 	metrics, otelShutdown, err := observability.Setup(context.Background(), observability.Config{
-		ServiceName:       "firecrackerlacker",
+		ServiceName:       "pyro",
 		OTLPEndpoint:      *otlpEndpoint,
 		PrometheusEnabled: *promEnabled,
 	}, log)
@@ -148,7 +148,7 @@ func main() {
 	}
 
 	// Embedded UI.
-	uiFS, err := fs.Sub(firecrackerlacker.UIBuild, "ui/build")
+	uiFS, err := fs.Sub(pyro.UIBuild, "ui/build")
 	if err != nil {
 		log.Warn("ui embed not available", "err", err)
 	}

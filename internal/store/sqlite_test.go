@@ -192,7 +192,7 @@ func TestAPIKeyLifecycle(t *testing.T) {
 
 	ak := &APIKey{
 		ID:        "ak-1",
-		Key:       "fclk_testkey123",
+		Key:       "pk_testkey123",
 		Name:      "test",
 		CreatedAt: time.Now().UTC(),
 	}
@@ -200,7 +200,7 @@ func TestAPIKeyLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := s.ValidateAPIKey(ctx, "fclk_testkey123")
+	got, err := s.ValidateAPIKey(ctx, "pk_testkey123")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestAPIKeyExpired(t *testing.T) {
 
 	ak := &APIKey{
 		ID:        "ak-expired",
-		Key:       "fclk_expired123",
+		Key:       "pk_expired123",
 		Name:      "expired",
 		CreatedAt: time.Now().UTC(),
 		ExpiresAt: time.Now().UTC().Add(-time.Hour),
@@ -240,7 +240,7 @@ func TestAPIKeyExpired(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := s.ValidateAPIKey(ctx, "fclk_expired123")
+	got, err := s.ValidateAPIKey(ctx, "pk_expired123")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -32,8 +32,8 @@ type ImageConfig struct {
 	// ImagesDir is the base directory for all images.
 	ImagesDir string
 
-	// AgentBinaryPath is the path to the compiled fc-agent binary.
-	// It gets injected into new rootfs images at /usr/bin/fc-agent.
+	// AgentBinaryPath is the path to the compiled pyro-agent binary.
+	// It gets injected into new rootfs images at /usr/bin/pyro-agent.
 	AgentBinaryPath string
 }
 
@@ -107,7 +107,7 @@ func (im *ImageManager) Get(name string) (*ImageInfo, error) {
 
 // CreateFromDockerfile builds a rootfs from a Dockerfile.
 // It uses docker/buildah to build the image, then exports the filesystem
-// to an ext4 image with the fc-agent binary injected.
+// to an ext4 image with the pyro-agent binary injected.
 func (im *ImageManager) CreateFromDockerfile(ctx context.Context, name, dockerfilePath string) (*ImageInfo, error) {
 	dir := filepath.Join(im.cfg.ImagesDir, name)
 	if err := os.MkdirAll(dir, 0750); err != nil {
@@ -122,7 +122,7 @@ func (im *ImageManager) CreateFromDockerfile(ctx context.Context, name, dockerfi
 		"dockerfile", dockerfilePath)
 
 	// Build Docker image.
-	dockerTag := fmt.Sprintf("firecrackerlacker/%s:latest", name)
+	dockerTag := fmt.Sprintf("pyro/%s:latest", name)
 	buildCmd := exec.CommandContext(ctx, "docker", "build",
 		"-t", dockerTag,
 		"-f", dockerfilePath,
@@ -158,7 +158,7 @@ func (im *ImageManager) CreateFromDockerfile(ctx context.Context, name, dockerfi
 		return nil, fmt.Errorf("tar to ext4: %w", err)
 	}
 
-	// Inject fc-agent binary into rootfs.
+	// Inject pyro-agent binary into rootfs.
 	if im.cfg.AgentBinaryPath != "" {
 		if err := im.injectAgent(ctx, rootfs); err != nil {
 			os.RemoveAll(dir)
@@ -212,7 +212,7 @@ func (im *ImageManager) tarToExt4(ctx context.Context, tarPath, ext4Path string)
 	return nil
 }
 
-// injectAgent copies the fc-agent binary into the rootfs at /usr/bin/fc-agent.
+// injectAgent copies the pyro-agent binary into the rootfs at /usr/bin/pyro-agent.
 func (im *ImageManager) injectAgent(ctx context.Context, ext4Path string) error {
 	mountDir := ext4Path + ".mount"
 	os.MkdirAll(mountDir, 0755)
@@ -224,7 +224,7 @@ func (im *ImageManager) injectAgent(ctx context.Context, ext4Path string) error 
 	}
 	defer exec.CommandContext(ctx, "umount", mountDir).Run()
 
-	agentDst := filepath.Join(mountDir, "usr", "bin", "fc-agent")
+	agentDst := filepath.Join(mountDir, "usr", "bin", "pyro-agent")
 	os.MkdirAll(filepath.Dir(agentDst), 0755)
 
 	if err := copyFile(im.cfg.AgentBinaryPath, agentDst); err != nil {

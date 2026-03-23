@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/danievanzyl/firecrackerlacker/internal/store"
+	"github.com/danievanzyl/pyro/internal/store"
 )
 
 // QuotaConfig defines resource limits per API key.

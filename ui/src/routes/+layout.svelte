@@ -38,7 +38,7 @@
 		<div class="topbar-left">
 			<a href="/" class="brand" onclick={handleNavClick}>
 				<span class="material-symbols-outlined brand-icon">local_fire_department</span>
-				<span class="brand-name">firecrackerlacker</span>
+				<span class="brand-name">Pyro</span>
 			</a>
 			<nav class="nav-tabs">
 				{#each navItems as item}

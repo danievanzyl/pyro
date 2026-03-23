@@ -1,0 +1,33 @@
+[Unit]
+Description=pyro - agentic sandbox platform
+After=network.target
+Requires=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/pyro/bin/pyro-server \
+  --listen :8080 \
+  --db /opt/pyro/db/pyro.db \
+  --state-dir /opt/pyro/vms \
+  --images-dir /opt/pyro/images \
+  --firecracker /usr/local/bin/firecracker \
+  --kernel /opt/pyro/images/vmlinux \
+  --rootfs /opt/pyro/images/default/rootfs.ext4 \
+  --bridge fcbr0 \
+  --max-sandboxes 50 \
+  --max-per-key 10 \
+  --rate-limit 30 \
+  --max-vcpu 4 \
+  --max-mem-mib 2048 \
+  --default-vcpu 1 \
+  --default-mem-mib 256 \
+  --pool-size 1 \
+  --snapshot-dir /opt/pyro/snapshots \
+  --prometheus
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+WorkingDirectory=/opt/pyro
+
+[Install]
+WantedBy=multi-user.target

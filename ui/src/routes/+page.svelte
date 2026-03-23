@@ -92,7 +92,7 @@
 		<h3>Connect to your cluster</h3>
 		<p>Enter your API key to monitor sandboxes</p>
 		<div class="key-row">
-			<input type="password" bind:value={apiKeyInput} placeholder="fclk_..." />
+			<input type="password" bind:value={apiKeyInput} placeholder="pk_..." />
 			<button class="btn-primary" onclick={saveKey}>Connect</button>
 		</div>
 	</div>

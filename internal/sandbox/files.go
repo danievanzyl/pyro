@@ -6,7 +6,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/danievanzyl/firecrackerlacker/internal/protocol"
+	"github.com/danievanzyl/pyro/internal/protocol"
 )
 
 // WriteFileInSandbox sends a file to the in-VM agent for writing.

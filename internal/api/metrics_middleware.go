@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/danievanzyl/firecrackerlacker/internal/observability"
+	"github.com/danievanzyl/pyro/internal/observability"
 	"github.com/go-chi/chi/v5"
 )
 

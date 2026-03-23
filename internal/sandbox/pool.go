@@ -268,7 +268,7 @@ func (p *Pool) createSnapshot(ctx context.Context, image string) (*snapshot, err
 	config := fmt.Sprintf(`{
   "boot-source": {
     "kernel_image_path": %q,
-    "boot_args": "console=ttyS0 reboot=k panic=1 pci=off init=/usr/bin/fc-agent"
+    "boot_args": "console=ttyS0 reboot=k panic=1 pci=off init=/usr/bin/pyro-agent"
   },
   "drives": [{
     "drive_id": "rootfs",

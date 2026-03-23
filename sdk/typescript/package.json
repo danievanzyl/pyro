@@ -1,0 +1,38 @@
+{
+  "name": "@pyrovm/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for Pyro — open-source sandbox platform for AI agents",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test tests/*.test.js"
+  },
+  "keywords": [
+    "sandbox",
+    "microvm",
+    "firecracker",
+    "ai",
+    "agents",
+    "pyro"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/danievanzyl/pyro"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^5.4.0"
+  }
+}

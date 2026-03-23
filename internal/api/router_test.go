@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danievanzyl/firecrackerlacker/internal/store"
+	"github.com/danievanzyl/pyro/internal/store"
 )
 
 func setupTestStore(t *testing.T) *store.Store {
@@ -23,7 +23,7 @@ func setupTestStore(t *testing.T) *store.Store {
 	// Create a test API key.
 	ak := &store.APIKey{
 		ID:        "test-key-id",
-		Key:       "fclk_testkey",
+		Key:       "pk_testkey",
 		Name:      "test",
 		CreatedAt: time.Now().UTC(),
 	}
@@ -75,7 +75,7 @@ func TestHealthEndpoint(t *testing.T) {
 		}))
 
 		req := httptest.NewRequest("GET", "/sandboxes", nil)
-		req.Header.Set("Authorization", "Bearer fclk_wrongkey")
+		req.Header.Set("Authorization", "Bearer pk_wrongkey")
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 
@@ -92,7 +92,7 @@ func TestHealthEndpoint(t *testing.T) {
 		}))
 
 		req := httptest.NewRequest("GET", "/sandboxes", nil)
-		req.Header.Set("Authorization", "Bearer fclk_testkey")
+		req.Header.Set("Authorization", "Bearer pk_testkey")
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 

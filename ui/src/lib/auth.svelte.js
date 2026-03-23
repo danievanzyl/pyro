@@ -1,6 +1,6 @@
 // Shared API key — reads from localStorage, no reactive state.
 
-const STORAGE_KEY = 'fclk_api_key';
+const STORAGE_KEY = 'pyro_api_key';
 
 export function getApiKey() {
 	if (typeof localStorage === 'undefined') return '';
