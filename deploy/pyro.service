@@ -21,7 +21,7 @@ ExecStart=/opt/pyro/bin/pyro-server \
   --max-mem-mib 2048 \
   --default-vcpu 1 \
   --default-mem-mib 256 \
-  --pool-size 1 \
+  --pool-size 0 \
   --snapshot-dir /opt/pyro/snapshots \
   --prometheus
 Restart=on-failure
