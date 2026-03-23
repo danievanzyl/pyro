@@ -3,7 +3,7 @@
 // Commands:
 //
 //	pyro setup                          — one-command host setup
-//	pyro build-kernel                   — build Linux 6.1 kernel for Firecracker
+//	pyro build-kernel                   — download pre-built Firecracker guest kernel
 //	pyro build-image <name|all>         — build rootfs image (minimal/ubuntu/python/node)
 //	pyro create-key [name]              — create API key (direct DB)
 //	pyro sandbox create [--ttl N]       — create sandbox
@@ -288,7 +288,7 @@ func usage() {
 
 Host Setup (requires root):
   setup                                Full host setup (kernel, images, bridge, service)
-  build-kernel                         Build Linux 6.1 kernel for Firecracker
+  build-kernel                         Download pre-built FC guest kernel (5.10/6.1)
   build-image <name|all>               Build rootfs image (minimal/ubuntu/python/node)
 
 Diagnostics:

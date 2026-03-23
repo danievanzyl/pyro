@@ -221,64 +221,30 @@ func buildFromOCI(name, ociRef string, sizeMB int, postPkgs []string, postCmds [
 func buildKernel() {
 	requireRoot()
 
-	version := envOr("KERNEL_VERSION", "6.1.166")
-	major := strings.Split(version, ".")[0]
-	buildDir := envOr("KERNEL_BUILD_DIR", "/tmp/kernel-build")
+	fcVersion := envOr("FC_VERSION", "v1.15")
+	version := envOr("KERNEL_VERSION", "5.10.245")
 	output := filepath.Join(imagesDir, "vmlinux")
-	configURL := "https://raw.githubusercontent.com/firecracker-microvm/firecracker/main/resources/guest_configs/microvm-kernel-ci-x86_64-6.1.config"
-	kernelURL := fmt.Sprintf("https://cdn.kernel.org/pub/linux/kernel/v%s.x/linux-%s.tar.xz", major, version)
 
-	nproc := "1"
-	if out, err := exec.Command("nproc").Output(); err == nil {
-		nproc = strings.TrimSpace(string(out))
-	}
+	// Download pre-built kernel from Firecracker CI artifacts.
+	kernelURL := fmt.Sprintf(
+		"https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/%s/x86_64/vmlinux-%s",
+		fcVersion, version)
 
-	fmt.Printf("==> Building kernel %s (%s cores)\n", version, nproc)
-
-	// Install build deps
-	run("apt-get", "update", "-qq")
-	run("apt-get", "install", "-y", "-qq",
-		"build-essential", "bc", "bison", "flex", "libssl-dev",
-		"libelf-dev", "libncurses-dev", "dwarves", "wget", "xz-utils")
-
+	fmt.Printf("==> Downloading pre-built kernel %s (FC %s)\n", version, fcVersion)
 	os.MkdirAll(imagesDir, 0755)
-	os.MkdirAll(buildDir, 0755)
 
-	// Download kernel source
-	kernelTar := filepath.Join(buildDir, fmt.Sprintf("linux-%s.tar.xz", version))
-	kernelSrc := filepath.Join(buildDir, fmt.Sprintf("linux-%s", version))
-	if !exists(kernelSrc) {
-		if !exists(kernelTar) {
-			fmt.Printf("==> Downloading linux-%s\n", version)
-			run("wget", "-q", "--show-progress", "-O", kernelTar, kernelURL)
-		}
-		fmt.Println("==> Extracting")
-		run("tar", "-xf", kernelTar, "-C", buildDir)
+	// Backup existing kernel.
+	if exists(output) {
+		backup := output + ".bak"
+		cp(output, backup)
+		fmt.Printf("    backed up existing kernel to %s\n", backup)
 	}
 
-	// Download Firecracker config
-	configFile := filepath.Join(buildDir, "microvm.config")
-	if !exists(configFile) {
-		fmt.Println("==> Downloading Firecracker microvm config")
-		run("wget", "-q", "-O", configFile, configURL)
-	}
+	run("wget", "-q", "--show-progress", "-O", output, kernelURL)
+	os.Chmod(output, 0755)
 
-	// Skip if vmlinux newer than config
-	if exists(output) && isNewer(output, configFile) {
-		fmt.Println("==> vmlinux already up to date")
-		return
-	}
-
-	// Build
-	cp(configFile, filepath.Join(kernelSrc, ".config"))
-	runIn(kernelSrc, "make", "olddefconfig")
-	fmt.Println("==> Compiling vmlinux")
-	runIn(kernelSrc, "make", "-j"+nproc, "vmlinux")
-
-	// Install
-	cp(filepath.Join(kernelSrc, "vmlinux"), output)
-	os.Chmod(output, 0644)
-	fmt.Println("==> Kernel build complete")
+	info, _ := os.Stat(output)
+	fmt.Printf("==> Kernel installed: %s (%.1f MB)\n", version, float64(info.Size())/1024/1024)
 }
 
 // --- Minimal image (no container runtime needed) ---
