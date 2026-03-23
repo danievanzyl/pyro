@@ -305,7 +305,7 @@ func (p *Pool) createSnapshot(ctx context.Context, image string) (*snapshot, err
 	config := fmt.Sprintf(`{
   "boot-source": {
     "kernel_image_path": %q,
-    "boot_args": "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/usr/bin/pyro-agent"
+    "boot_args": "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/usr/bin/pyro-agent pyro.ip=172.16.0.%d pyro.gw=172.16.0.1"
   },
   "drives": [{
     "drive_id": "rootfs",
@@ -319,14 +319,14 @@ func (p *Pool) createSnapshot(ctx context.Context, image string) (*snapshot, err
   },
   "network-interfaces": [{
     "iface_id": "eth0",
-    "guest_mac": "06:00:AC:10:00:02",
+    "guest_mac": "06:00:AC:10:00:%02x",
     "host_dev_name": %q
   }],
   "vsock": {
     "guest_cid": %d,
     "uds_path": %q
   }
-}`, p.manager.cfg.KernelPath, rootfsPath, tempSB.tapDevice, cid,
+}`, cid, rootfsPath, cid, tempSB.tapDevice, cid,
 		filepath.Join(stateDir, "vsock.sock"))
 
 	if err := os.WriteFile(configPath, []byte(config), 0640); err != nil {
