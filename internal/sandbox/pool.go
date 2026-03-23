@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -124,6 +125,9 @@ func (p *Pool) Run(ctx context.Context) {
 		images = p.discoverImages()
 	}
 
+	// Clean up any orphaned snapshot dirs from previous failed runs.
+	p.cleanupOrphans()
+
 	p.log.Info("snapshot pool started",
 		"target_size", p.cfg.TargetSize,
 		"images", images,
@@ -146,6 +150,34 @@ func (p *Pool) Run(ctx context.Context) {
 			for _, img := range images {
 				p.replenish(ctx, img)
 			}
+		}
+	}
+}
+
+// cleanupOrphans removes snapshot dirs that aren't tracked in the pool.
+func (p *Pool) cleanupOrphans() {
+	entries, err := os.ReadDir(p.cfg.SnapshotDir)
+	if err != nil {
+		return
+	}
+
+	p.mu.Lock()
+	tracked := make(map[string]bool)
+	for _, snaps := range p.ready {
+		for _, s := range snaps {
+			tracked[s.ID] = true
+		}
+	}
+	p.mu.Unlock()
+
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if !tracked[e.Name()] {
+			path := filepath.Join(p.cfg.SnapshotDir, e.Name())
+			p.log.Info("cleaning orphaned snapshot", "id", e.Name())
+			os.RemoveAll(path)
 		}
 	}
 }
@@ -216,6 +248,11 @@ func (p *Pool) replenish(ctx context.Context, image string) {
 
 // createSnapshot boots a VM, waits for the agent, then takes a snapshot.
 func (p *Pool) createSnapshot(ctx context.Context, image string) (*snapshot, error) {
+	// Pre-check disk space — need at least 2GB for rootfs copy + snapshot files.
+	if avail, err := availableDiskSpace(p.cfg.SnapshotDir); err == nil && avail < 2*1024*1024*1024 {
+		return nil, fmt.Errorf("insufficient disk space: %d MB available, need 2048 MB", avail/1024/1024)
+	}
+
 	id := fmt.Sprintf("snap-%d", time.Now().UnixNano())
 	snapDir := filepath.Join(p.cfg.SnapshotDir, id)
 	if err := os.MkdirAll(snapDir, 0750); err != nil {
@@ -354,6 +391,15 @@ func (p *Pool) createSnapshot(ctx context.Context, image string) (*snapshot, err
 		VsockCID:  cid,
 		CreatedAt: time.Now(),
 	}, nil
+}
+
+// availableDiskSpace returns free bytes on the filesystem containing path.
+func availableDiskSpace(path string) (uint64, error) {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(path, &stat); err != nil {
+		return 0, err
+	}
+	return stat.Bavail * uint64(stat.Bsize), nil
 }
 
 type tempVM struct {
