@@ -174,6 +174,7 @@
 	.field label { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--on-surface-variant); }
 	.field select, .field input { min-width: 120px; height: 2.5rem; box-sizing: border-box; }
 	.field-action { align-self: flex-end; }
+	.field-action .btn-primary { height: 2.5rem; box-sizing: border-box; }
 
 	.action-btns { display: flex; gap: 0.25rem; }
 
