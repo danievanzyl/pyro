@@ -417,8 +417,8 @@ func mustMount(rootfs string) string {
 }
 
 func cleanup(mnt, rootfs string) {
-	exec.Command("umount", mnt).Run()
-	os.Remove(mnt)
+	exec.Command("umount", "-l", mnt).Run()
+	os.RemoveAll(mnt)
 	if info, err := os.Stat(rootfs); err == nil {
 		fmt.Printf("    rootfs: %s (%.0f MB)\n", rootfs, float64(info.Size())/1024/1024)
 	}
