@@ -92,8 +92,13 @@ func (im *ImageManager) Get(name string) (*ImageInfo, error) {
 		return nil, fmt.Errorf("rootfs not found for image %q: %w", name, err)
 	}
 
+	// Fall back to shared kernel in images root if no per-image kernel.
 	if _, err := os.Stat(kernel); err != nil {
-		return nil, fmt.Errorf("kernel not found for image %q: %w", name, err)
+		shared := filepath.Join(im.cfg.ImagesDir, "vmlinux")
+		if _, err := os.Stat(shared); err != nil {
+			return nil, fmt.Errorf("kernel not found for image %q: %w", name, err)
+		}
+		kernel = shared
 	}
 
 	return &ImageInfo{
