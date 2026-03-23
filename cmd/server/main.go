@@ -32,13 +32,13 @@ import (
 func main() {
 	var (
 		listenAddr     = flag.String("listen", ":8080", "API server listen address")
-		dbPath         = flag.String("db", "/var/lib/pyro/pyro.db", "SQLite database path")
-		stateDir       = flag.String("state-dir", "/var/lib/pyro/vms", "VM state directory")
-		imagesDir      = flag.String("images-dir", "/var/lib/pyro/images", "Base images directory")
+		dbPath         = flag.String("db", "/opt/pyro/pyro.db", "SQLite database path")
+		stateDir       = flag.String("state-dir", "/opt/pyro/vms", "VM state directory")
+		imagesDir      = flag.String("images-dir", "/opt/pyro/images", "Base images directory")
 		firecrackerBin = flag.String("firecracker", "/usr/bin/firecracker", "Firecracker binary path")
 		jailerBin      = flag.String("jailer", "/usr/bin/jailer", "Jailer binary path")
-		kernelPath     = flag.String("kernel", "/var/lib/pyro/images/vmlinux", "Guest kernel path")
-		rootfsPath     = flag.String("rootfs", "/var/lib/pyro/images/rootfs.ext4", "Default rootfs path")
+		kernelPath     = flag.String("kernel", "/opt/pyro/images/vmlinux", "Guest kernel path")
+		rootfsPath     = flag.String("rootfs", "/opt/pyro/images/rootfs.ext4", "Default rootfs path")
 		bridgeName     = flag.String("bridge", "fcbr0", "Network bridge name")
 		maxSandboxes   = flag.Int("max-sandboxes", 100, "Maximum concurrent sandboxes")
 		reaperInterval = flag.Duration("reaper-interval", 5*time.Second, "TTL reaper check interval")
@@ -52,7 +52,7 @@ func main() {
 		defaultVCPU    = flag.Int("default-vcpu", 1, "Default vCPUs per sandbox")
 		defaultMemMiB  = flag.Int("default-mem-mib", 256, "Default memory per sandbox (MiB)")
 		poolSize       = flag.Int("pool-size", 0, "Snapshot pool size per image (0 = disabled)")
-		snapshotDir    = flag.String("snapshot-dir", "/var/lib/pyro/snapshots", "Snapshot pool directory")
+		snapshotDir    = flag.String("snapshot-dir", "/opt/pyro/snapshots", "Snapshot pool directory")
 	)
 	flag.Parse()
 

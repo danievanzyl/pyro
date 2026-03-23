@@ -32,7 +32,7 @@ import (
 var (
 	apiURL = envOr("PYRO_BASE_URL", "http://localhost:8080")
 	apiKey = os.Getenv("PYRO_API_KEY")
-	dbPath = envOr("PYRO_DB", "/var/lib/pyro/pyro.db")
+	dbPath = envOr("PYRO_DB", "/opt/pyro/db/pyro.db")
 )
 
 func main() {
@@ -309,7 +309,7 @@ Shortcuts: sb = sandbox, ls = list, rm = kill
 Environment:
   PYRO_API_KEY   API key (required for sandbox/image commands)
   PYRO_BASE_URL  API server URL (default: http://localhost:8080)
-  PYRO_DB        SQLite path (default: /var/lib/pyro/pyro.db)
+  PYRO_DB        SQLite path (default: /opt/pyro/db/pyro.db)
   PYRO_IMAGES    Images directory (default: /opt/pyro/images)
 `)
 }

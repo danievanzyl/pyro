@@ -10,5 +10,8 @@ ui/bun.lock
 *.png
 .playwright-mcp/
 .gstack/
-*.png
-.playwright-mcp/
+/fcctl
+/server
+sdk/python/.venv/
+sdk/python/*.egg-info/
+sdk/typescript/node_modules/
