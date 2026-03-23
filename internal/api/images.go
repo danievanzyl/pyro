@@ -13,6 +13,21 @@ func SetupImageRoutes(r chi.Router, imgMgr *sandbox.ImageManager) {
 	r.Get("/images", handleListImages(imgMgr))
 	r.Get("/images/{name}", handleGetImage(imgMgr))
 	r.Post("/images", handleCreateImage(imgMgr))
+	r.Get("/kernels", handleListKernels(imgMgr))
+}
+
+func handleListKernels(imgMgr *sandbox.ImageManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		kernels, err := imgMgr.ListKernels()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if kernels == nil {
+			kernels = []*sandbox.KernelInfo{}
+		}
+		writeJSON(w, http.StatusOK, kernels)
+	}
 }
 
 func handleListImages(imgMgr *sandbox.ImageManager) http.HandlerFunc {

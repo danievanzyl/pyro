@@ -60,6 +60,74 @@ func NewImageManager(cfg ImageConfig, log *slog.Logger) (*ImageManager, error) {
 	return &ImageManager{cfg: cfg, log: log}, nil
 }
 
+// KernelInfo describes an available guest kernel.
+type KernelInfo struct {
+	Version string `json:"version"`
+	Path    string `json:"path"`
+	Size    int64  `json:"size"`
+}
+
+// ListKernels returns all vmlinux-* kernels in the images dir, sorted by version descending.
+func (im *ImageManager) ListKernels() ([]*KernelInfo, error) {
+	entries, err := os.ReadDir(im.cfg.ImagesDir)
+	if err != nil {
+		return nil, fmt.Errorf("read images dir: %w", err)
+	}
+
+	var kernels []*KernelInfo
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if len(name) < 8 || name[:8] != "vmlinux-" {
+			continue
+		}
+		version := name[8:]
+		path := filepath.Join(im.cfg.ImagesDir, name)
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		kernels = append(kernels, &KernelInfo{
+			Version: version,
+			Path:    path,
+			Size:    info.Size(),
+		})
+	}
+
+	// Sort descending by version string (higher versions first).
+	for i := 0; i < len(kernels); i++ {
+		for j := i + 1; j < len(kernels); j++ {
+			if kernels[j].Version > kernels[i].Version {
+				kernels[i], kernels[j] = kernels[j], kernels[i]
+			}
+		}
+	}
+
+	return kernels, nil
+}
+
+// ResolveKernel returns the path for a kernel version, or the latest if version is empty.
+func (im *ImageManager) ResolveKernel(version string) (string, error) {
+	kernels, err := im.ListKernels()
+	if err != nil {
+		return "", err
+	}
+	if len(kernels) == 0 {
+		return "", fmt.Errorf("no kernels found in %s", im.cfg.ImagesDir)
+	}
+	if version == "" {
+		return kernels[0].Path, nil // latest (sorted descending)
+	}
+	for _, k := range kernels {
+		if k.Version == version {
+			return k.Path, nil
+		}
+	}
+	return "", fmt.Errorf("kernel version %q not found", version)
+}
+
 // List returns all available images.
 func (im *ImageManager) List() ([]*ImageInfo, error) {
 	entries, err := os.ReadDir(im.cfg.ImagesDir)

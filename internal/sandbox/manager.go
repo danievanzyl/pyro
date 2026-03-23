@@ -140,8 +140,9 @@ func (m *Manager) ActiveCount() int {
 
 // VMResources holds configurable VM resources.
 type VMResources struct {
-	VCPU   int // 0 = use default
-	MemMiB int // 0 = use default
+	VCPU       int    // 0 = use default
+	MemMiB     int    // 0 = use default
+	KernelPath string // empty = use server default
 }
 
 // CreateSandbox provisions a new Firecracker microVM.
@@ -243,7 +244,11 @@ func (m *Manager) CreateSandbox(ctx context.Context, apiKeyID, image string, ttl
 	// Spawn Firecracker.
 	spawnStart := time.Now()
 	vmCtx, vmCancel := context.WithCancel(context.Background())
-	cmd, err := m.spawnFirecracker(vmCtx, sb, rootfsPath, vcpu, memMiB)
+	kernelPath := res.KernelPath
+	if kernelPath == "" {
+		kernelPath = m.cfg.KernelPath
+	}
+	cmd, err := m.spawnFirecracker(vmCtx, sb, rootfsPath, kernelPath, vcpu, memMiB)
 	if err != nil {
 		vmCancel()
 		m.cleanupNetworking(tapDevice)
@@ -473,7 +478,7 @@ func (m *Manager) Shutdown(ctx context.Context) {
 }
 
 // spawnFirecracker starts a Firecracker process.
-func (m *Manager) spawnFirecracker(ctx context.Context, sb *store.Sandbox, rootfsPath string, vcpu, memMiB int) (*exec.Cmd, error) {
+func (m *Manager) spawnFirecracker(ctx context.Context, sb *store.Sandbox, rootfsPath, kernelPath string, vcpu, memMiB int) (*exec.Cmd, error) {
 	// Build the Firecracker config JSON and write to state dir.
 	configPath := filepath.Join(sb.StateDir, "vm-config.json")
 	config := fmt.Sprintf(`{
@@ -500,7 +505,7 @@ func (m *Manager) spawnFirecracker(ctx context.Context, sb *store.Sandbox, rootf
     "guest_cid": %d,
     "uds_path": %q
   }
-}`, m.cfg.KernelPath, rootfsPath, vcpu, memMiB, sb.TapDevice, sb.VsockCID,
+}`, kernelPath, rootfsPath, vcpu, memMiB, sb.TapDevice, sb.VsockCID,
 		filepath.Join(sb.StateDir, "vsock.sock"))
 
 	if err := os.WriteFile(configPath, []byte(config), 0640); err != nil {
