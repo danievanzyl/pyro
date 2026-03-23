@@ -172,7 +172,7 @@
 	.create-fields { display: flex; gap: 0.75rem; align-items: flex-end; flex-wrap: wrap; }
 	.field { display: flex; flex-direction: column; gap: 0.3rem; }
 	.field label { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--on-surface-variant); }
-	.field select, .field input { min-width: 120px; }
+	.field select, .field input { min-width: 120px; height: 2.5rem; box-sizing: border-box; }
 	.field-action { align-self: flex-end; }
 
 	.action-btns { display: flex; gap: 0.25rem; }
