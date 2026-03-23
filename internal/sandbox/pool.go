@@ -309,6 +309,7 @@ func (p *Pool) createSnapshot(ctx context.Context, image string) (*snapshot, err
 	// Wait for agent using proper ping protocol.
 	if err := p.manager.WaitForAgentAt(stateDir, 15*time.Second); err != nil {
 		cmd.Process.Kill()
+		cmd.Wait()
 		p.manager.cleanupNetworking(tempSB.tapDevice)
 		os.RemoveAll(snapDir)
 		return nil, fmt.Errorf("agent timeout: %w", err)
@@ -317,6 +318,7 @@ func (p *Pool) createSnapshot(ctx context.Context, image string) (*snapshot, err
 	// Pause the VM before snapshotting.
 	if err := firecrackerAPICall(socketPath, "PATCH", "/vm", `{"state":"Paused"}`); err != nil {
 		cmd.Process.Kill()
+		cmd.Wait()
 		p.manager.cleanupNetworking(tempSB.tapDevice)
 		os.RemoveAll(snapDir)
 		return nil, fmt.Errorf("pause vm: %w", err)
@@ -330,6 +332,7 @@ func (p *Pool) createSnapshot(ctx context.Context, image string) (*snapshot, err
 
 	if err := firecrackerAPICall(socketPath, "PUT", "/snapshot/create", snapPayload); err != nil {
 		cmd.Process.Kill()
+		cmd.Wait()
 		p.manager.cleanupNetworking(tempSB.tapDevice)
 		os.RemoveAll(snapDir)
 		return nil, fmt.Errorf("create snapshot: %w", err)
@@ -337,6 +340,7 @@ func (p *Pool) createSnapshot(ctx context.Context, image string) (*snapshot, err
 
 	// Kill the temp VM — we only need the snapshot files.
 	cmd.Process.Kill()
+	cmd.Wait() // reap zombie
 	p.manager.cleanupNetworking(tempSB.tapDevice)
 	// Keep snapDir — it has the snapshot files we need.
 	// Remove the temp VM socket and logs.

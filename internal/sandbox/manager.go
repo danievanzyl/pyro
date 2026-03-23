@@ -667,10 +667,11 @@ func (m *Manager) cleanupNetworking(tapDevice string) {
 	runCmd("ip", "tuntap", "del", tapDevice, "mode", "tap")
 }
 
-// killProcess sends SIGKILL to a Firecracker process.
+// killProcess sends SIGKILL and reaps a Firecracker process.
 func (m *Manager) killProcess(cmd *exec.Cmd) {
 	if cmd != nil && cmd.Process != nil {
 		cmd.Process.Kill()
+		cmd.Wait() // reap zombie
 	}
 }
 
