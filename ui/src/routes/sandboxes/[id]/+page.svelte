@@ -10,6 +10,10 @@
 	let consoleEl = $state(null);
 	let autoScroll = $state(true);
 	let activeTab = $state('console');
+	let cmdInput = $state('');
+	let cmdRunning = $state(false);
+	let cmdHistory = $state([]);
+	let historyIdx = $state(-1);
 
 	const id = page.params.id;
 
@@ -39,19 +43,60 @@
 		ws.onmessage = (e) => {
 			try {
 				const data = JSON.parse(e.data);
-				if (data.stdout) {
-					consoleLines = [...consoleLines, ...data.stdout.split('\n')];
-					if (autoScroll && consoleEl) {
-						setTimeout(() => consoleEl.scrollTop = consoleEl.scrollHeight, 10);
+				if (data.type === 'stdout' && data.data) {
+					consoleLines = [...consoleLines, ...data.data.split('\n').filter(l => l)];
+				} else if (data.type === 'stderr' && data.data) {
+					consoleLines = [...consoleLines, ...data.data.split('\n').filter(l => l).map(l => `[stderr] ${l}`)];
+				} else if (data.type === 'exit') {
+					if (data.exit_code !== 0) {
+						consoleLines = [...consoleLines, `exit ${data.exit_code}`];
 					}
+					cmdRunning = false;
+				} else if (data.type === 'error' && data.data) {
+					consoleLines = [...consoleLines, `error: ${data.data}`];
+					cmdRunning = false;
 				}
-				if (data.stderr) {
-					consoleLines = [...consoleLines, ...data.stderr.split('\n').map(l => `[stderr] ${l}`)];
+				if (autoScroll && consoleEl) {
+					setTimeout(() => consoleEl.scrollTop = consoleEl.scrollHeight, 10);
 				}
 			} catch {}
 		};
-		ws.onclose = () => { wsStatus = 'disconnected'; };
-		ws.onerror = () => { wsStatus = 'error'; };
+		ws.onclose = () => { wsStatus = 'disconnected'; ws = null; };
+		ws.onerror = () => { wsStatus = 'error'; ws = null; };
+	}
+
+	function sendCommand() {
+		if (!cmdInput.trim() || !ws || ws.readyState !== WebSocket.OPEN) return;
+		const cmd = cmdInput.trim();
+		consoleLines = [...consoleLines, `$ ${cmd}`];
+		cmdHistory = [...cmdHistory, cmd];
+		historyIdx = -1;
+		cmdRunning = true;
+		ws.send(JSON.stringify({ type: 'exec', command: ['sh', '-c', cmd] }));
+		cmdInput = '';
+		if (autoScroll && consoleEl) {
+			setTimeout(() => consoleEl.scrollTop = consoleEl.scrollHeight, 10);
+		}
+	}
+
+	function handleKeydown(e) {
+		if (e.key === 'Enter') {
+			e.preventDefault();
+			sendCommand();
+		} else if (e.key === 'ArrowUp') {
+			e.preventDefault();
+			if (cmdHistory.length > 0) {
+				historyIdx = historyIdx < 0 ? cmdHistory.length - 1 : Math.max(0, historyIdx - 1);
+				cmdInput = cmdHistory[historyIdx];
+			}
+		} else if (e.key === 'ArrowDown') {
+			e.preventDefault();
+			if (historyIdx >= 0) {
+				historyIdx = historyIdx + 1;
+				cmdInput = historyIdx < cmdHistory.length ? cmdHistory[historyIdx] : '';
+				if (historyIdx >= cmdHistory.length) historyIdx = -1;
+			}
+		}
 	}
 
 	function clearConsole() { consoleLines = []; }
@@ -162,6 +207,26 @@
 				{/if}
 				<span class="cursor">_</span>
 			</div>
+			<div class="console-input-bar">
+				<span class="console-prompt">$</span>
+				<input
+					class="console-input"
+					type="text"
+					bind:value={cmdInput}
+					onkeydown={handleKeydown}
+					placeholder={wsStatus === 'connected' ? 'Type a command...' : 'Connecting...'}
+					disabled={wsStatus !== 'connected'}
+					autocomplete="off"
+					spellcheck="false"
+				/>
+				<button class="console-send" onclick={sendCommand} disabled={wsStatus !== 'connected' || !cmdInput.trim() || cmdRunning}>
+					{#if cmdRunning}
+						<span class="material-symbols-outlined spin" style="font-size:1rem;">progress_activity</span>
+					{:else}
+						<span class="material-symbols-outlined" style="font-size:1rem;">send</span>
+					{/if}
+				</button>
+			</div>
 		</div>
 	{:else if activeTab === 'config'}
 		<div class="config-grid">
@@ -247,6 +312,29 @@
 	.console-line { min-height: 1.5em; }
 	.cursor { animation: blink 1s step-end infinite; color: #4ae176; }
 	@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+	.console-input-bar {
+		display: flex; align-items: center; gap: 0;
+		background: #252525; border-top: 1px solid #333;
+		padding: 0.5rem 0.75rem;
+	}
+	.console-prompt {
+		color: #4ae176; font-family: var(--font-mono); font-size: 13px;
+		font-weight: 600; margin-right: 0.5rem; user-select: none;
+	}
+	.console-input {
+		flex: 1; background: transparent; border: none; outline: none;
+		color: #e2e2e2; font-family: var(--font-mono); font-size: 13px;
+		caret-color: #4ae176;
+	}
+	.console-input::placeholder { color: #555; }
+	.console-input:disabled { opacity: 0.4; }
+	.console-send {
+		background: none; border: none; color: #5e5e5e; cursor: pointer;
+		padding: 0.25rem; display: flex; align-items: center;
+	}
+	.console-send:hover:not(:disabled) { color: #4ae176; }
+	.console-send:disabled { opacity: 0.3; cursor: not-allowed; }
 
 	.config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; }
 	.config-section h4 { font-family: var(--font-headline); font-size: 0.85rem; font-weight: 600; margin-bottom: 0.75rem; }

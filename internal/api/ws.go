@@ -33,7 +33,7 @@ type wsExecRequest struct {
 type wsExecOutput struct {
 	Type     string `json:"type"` // "stdout", "stderr", "exit", "error"
 	Data     string `json:"data,omitempty"`
-	ExitCode int    `json:"exit_code,omitempty"`
+	ExitCode int    `json:"exit_code"`
 }
 
 // SetupWebSocketRoutes adds WebSocket routes to an existing chi router.
