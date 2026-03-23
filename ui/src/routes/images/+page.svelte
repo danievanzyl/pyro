@@ -4,76 +4,92 @@
 	let images = $state([]);
 	let error = $state('');
 
+	function formatSize(bytes) {
+		if (bytes < 1024) return bytes + ' B';
+		if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
+		if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+		return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+	}
+
+	function formatDate(d) {
+		return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+	}
+
 	async function refresh() {
 		try {
 			const res = await apiFetch('/images');
 			if (res.ok) images = await res.json();
+			error = '';
 		} catch (e) { error = e.message; }
 	}
 
 	refresh();
-
-	function formatSize(bytes) {
-		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-		if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-		return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-	}
 </script>
 
 <div class="page-header">
 	<div>
 		<h1>Base Images</h1>
-		<p class="subtitle">Rootfs + kernel pairs available for sandbox provisioning</p>
+		<p class="subtitle">Rootfs images available for sandbox creation</p>
 	</div>
 </div>
 
 {#if error}
-	<div class="error-banner glass-panel">
-		<span class="material-symbols-outlined">error</span> {error}
+	<div class="error-banner">
+		<span class="material-symbols-outlined">error</span>
+		{error}
 	</div>
 {/if}
 
 {#if images.length > 0}
-	<div class="image-grid">
-		{#each images as img}
-			<div class="image-card glass-panel">
-				<div class="image-icon">
-					<span class="material-symbols-outlined">storage</span>
-				</div>
-				<div class="image-info">
-					<div class="image-name">{img.name}</div>
-					<div class="image-meta">{formatSize(img.size)} &middot; {new Date(img.created_at).toLocaleDateString()}</div>
-				</div>
-				<div class="image-badge">rootfs + kernel</div>
-			</div>
-		{/each}
+	<div class="card" style="padding:0; overflow:hidden;">
+		<table>
+			<thead>
+				<tr>
+					<th>Name</th>
+					<th>Size</th>
+					<th>Kernel</th>
+					<th>Created</th>
+				</tr>
+			</thead>
+			<tbody>
+				{#each images as img}
+					<tr>
+						<td>
+							<div class="image-name">
+								<span class="material-symbols-outlined" style="font-size:1.1rem; color:var(--on-surface-variant);">inventory_2</span>
+								<strong>{img.name}</strong>
+							</div>
+						</td>
+						<td>{formatSize(img.size)}</td>
+						<td class="mono" style="font-size:0.75rem;">{img.kernel_path ? 'vmlinux' : '—'}</td>
+						<td>{img.created_at ? formatDate(img.created_at) : '—'}</td>
+					</tr>
+				{/each}
+			</tbody>
+		</table>
 	</div>
 {:else}
-	<div class="empty-state glass-panel">
-		<span class="material-symbols-outlined" style="font-size: 3rem; color: var(--outline)">inventory_2</span>
-		<h3>No images found</h3>
-		<p>Add rootfs.ext4 + vmlinux pairs to the images directory on the host</p>
-		<code>/opt/firecrackerlacker/images/{'{name}'}/rootfs.ext4</code>
+	<div class="empty-state card">
+		<span class="material-symbols-outlined">inventory_2</span>
+		<h3>No images built</h3>
+		<p>Build images with the CLI</p>
+		<code class="mono cmd">fcctl build-image ubuntu</code>
 	</div>
 {/if}
 
 <style>
-	.page-header { margin-bottom: 2rem; }
-	h1 { font-family: var(--font-headline); font-size: 1.75rem; font-weight: 700; }
-	.subtitle { color: var(--on-surface-variant); font-size: 0.85rem; margin-top: 0.25rem; }
-	.error-banner { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; margin-bottom: 1.5rem; color: var(--error); font-size: 0.85rem; }
+	.page-header { margin-bottom: 1.25rem; }
+	h1 { font-family: var(--font-headline); font-size: 1.5rem; font-weight: 700; }
+	.subtitle { color: var(--on-surface-variant); font-size: 0.8rem; margin-top: 0.15rem; }
 
-	.image-grid { display: flex; flex-direction: column; gap: 0.75rem; }
-	.image-card { display: flex; align-items: center; gap: 1rem; padding: 1.25rem; transition: background 0.15s; }
-	.image-card:hover { background: rgba(39, 36, 49, 0.8); }
-	.image-icon { width: 40px; height: 40px; border-radius: 0.5rem; background: rgba(163, 67, 231, 0.1); display: flex; align-items: center; justify-content: center; color: var(--primary); }
-	.image-info { flex: 1; }
-	.image-name { font-family: var(--font-headline); font-size: 0.95rem; font-weight: 600; }
-	.image-meta { font-size: 0.75rem; color: var(--on-surface-variant); }
-	.image-badge { padding: 0.25rem 0.6rem; border-radius: 9999px; background: var(--surface-container-highest); color: var(--on-surface-variant); font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+	.image-name { display: flex; align-items: center; gap: 0.5rem; }
 
-	.empty-state { display: flex; flex-direction: column; align-items: center; padding: 4rem; text-align: center; gap: 0.75rem; }
-	.empty-state h3 { font-family: var(--font-headline); font-size: 1.1rem; }
-	.empty-state p { color: var(--on-surface-variant); font-size: 0.85rem; }
-	.empty-state code { display: block; margin-top: 0.5rem; padding: 0.5rem 1rem; background: var(--surface-container-low); border-radius: 0.5rem; font-size: 0.8rem; color: var(--primary); }
+	.cmd {
+		display: inline-block;
+		padding: 0.4rem 0.75rem;
+		background: var(--surface-container);
+		border-radius: var(--radius-sm);
+		font-size: 0.8rem;
+		color: var(--on-surface);
+	}
 </style>

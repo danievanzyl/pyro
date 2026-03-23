@@ -11,12 +11,18 @@ ExecStart=/opt/firecrackerlacker/bin/firecrackerlacker-server \
   --state-dir /opt/firecrackerlacker/vms \
   --images-dir /opt/firecrackerlacker/images \
   --firecracker /usr/local/bin/firecracker \
-  --kernel /opt/firecrackerlacker/images/default/vmlinux \
+  --kernel /opt/firecrackerlacker/images/vmlinux \
   --rootfs /opt/firecrackerlacker/images/default/rootfs.ext4 \
   --bridge fcbr0 \
   --max-sandboxes 50 \
   --max-per-key 10 \
   --rate-limit 30 \
+  --max-vcpu 4 \
+  --max-mem-mib 2048 \
+  --default-vcpu 1 \
+  --default-mem-mib 256 \
+  --pool-size 1 \
+  --snapshot-dir /opt/firecrackerlacker/snapshots \
   --prometheus
 Restart=on-failure
 RestartSec=5

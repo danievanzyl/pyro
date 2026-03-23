@@ -2,6 +2,9 @@
 //
 // Commands:
 //
+//	fcctl setup                          — one-command host setup
+//	fcctl build-kernel                   — build Linux 6.1 kernel for Firecracker
+//	fcctl build-image <name|all>         — build rootfs image (minimal/ubuntu/python/node)
 //	fcctl create-key [name]              — create API key (direct DB)
 //	fcctl sandbox create [--ttl N]       — create sandbox
 //	fcctl sandbox list                   — list active sandboxes
@@ -39,6 +42,12 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	case "setup":
+		setup()
+	case "build-kernel":
+		buildKernel()
+	case "build-image":
+		buildImage()
 	case "create-key":
 		createKey()
 	case "sandbox", "sb":
@@ -275,8 +284,15 @@ func envOr(key, fallback string) string {
 func usage() {
 	fmt.Fprintf(os.Stderr, `Usage: fcctl <command> [args]
 
-Commands:
+Host Setup (requires root):
+  setup                                Full host setup (kernel, images, bridge, service)
+  build-kernel                         Build Linux 6.1 kernel for Firecracker
+  build-image <name|all>               Build rootfs image (minimal/ubuntu/python/node)
+
+API Management:
   create-key [name]                    Create a new API key (direct DB)
+
+Sandbox Operations:
   sandbox create [--ttl N] [--image X] Create a sandbox
   sandbox list                         List active sandboxes
   sandbox exec <id> <cmd> [args...]    Execute command in sandbox
@@ -286,8 +302,9 @@ Commands:
 Shortcuts: sb = sandbox, ls = list, rm = kill
 
 Environment:
-  FCCTL_KEY  API key (required for sandbox/image commands)
-  FCCTL_API  API server URL (default: http://localhost:8080)
-  FCCTL_DB   SQLite path for create-key (default: /var/lib/firecrackerlacker/firecrackerlacker.db)
+  FCCTL_KEY       API key (required for sandbox/image commands)
+  FCCTL_API       API server URL (default: http://localhost:8080)
+  FCCTL_DB        SQLite path (default: /var/lib/firecrackerlacker/firecrackerlacker.db)
+  FCCTL_IMAGES    Images directory (default: /opt/firecrackerlacker/images)
 `)
 }

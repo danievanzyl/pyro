@@ -21,5 +21,5 @@ func initAsInit() {
 	os.Setenv("HOME", "/root")
 	os.Setenv("TERM", "linux")
 
-	exec.Command("/bin/busybox", "ip", "link", "set", "lo", "up").Run()
+	exec.Command("ip", "link", "set", "lo", "up").Run()
 }

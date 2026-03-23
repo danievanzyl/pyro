@@ -49,6 +49,8 @@ type Metrics struct {
 	SandboxesCreated     otelmetric.Int64Counter
 	SandboxesDestroyed   otelmetric.Int64Counter
 	SandboxCreateDur     otelmetric.Float64Histogram
+	SandboxCreatePhase   otelmetric.Float64Histogram // phase=rootfs_copy|spawn|agent_wait
+	SandboxCreateFailed  otelmetric.Int64Counter
 	SandboxExecDur       otelmetric.Float64Histogram
 	SandboxTTLRemaining  otelmetric.Float64Histogram
 	PoolAvailable        otelmetric.Int64UpDownCounter
@@ -145,6 +147,19 @@ func createMetrics(meter otelmetric.Meter) (*Metrics, error) {
 		return nil, err
 	}
 
+	m.SandboxCreatePhase, err = meter.Float64Histogram("fclk_sandbox_create_phase_seconds",
+		otelmetric.WithDescription("Time per phase of sandbox creation (rootfs_copy, spawn, agent_wait)"),
+		otelmetric.WithExplicitBucketBoundaries(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20))
+	if err != nil {
+		return nil, err
+	}
+
+	m.SandboxCreateFailed, err = meter.Int64Counter("fclk_sandbox_create_failed_total",
+		otelmetric.WithDescription("Total failed sandbox creations"))
+	if err != nil {
+		return nil, err
+	}
+
 	m.SandboxExecDur, err = meter.Float64Histogram("fclk_sandbox_exec_duration_seconds",
 		otelmetric.WithDescription("Time to execute a command in a sandbox"),
 		otelmetric.WithExplicitBucketBoundaries(0.01, 0.05, 0.1, 0.5, 1, 5, 30, 60, 300))
@@ -185,6 +200,22 @@ func createMetrics(meter otelmetric.Meter) (*Metrics, error) {
 	}
 
 	return m, nil
+}
+
+// RecordCreatePhase records timing for a specific sandbox creation phase.
+func (m *Metrics) RecordCreatePhase(ctx context.Context, image, phase string, duration time.Duration) {
+	m.SandboxCreatePhase.Record(ctx, duration.Seconds(), otelmetric.WithAttributes(
+		attribute.String("image", image),
+		attribute.String("phase", phase),
+	))
+}
+
+// RecordCreateFailed records a failed sandbox creation.
+func (m *Metrics) RecordCreateFailed(ctx context.Context, image, reason string) {
+	m.SandboxCreateFailed.Add(ctx, 1, otelmetric.WithAttributes(
+		attribute.String("image", image),
+		attribute.String("reason", reason),
+	))
 }
 
 // RecordSandboxCreated records a sandbox creation event.

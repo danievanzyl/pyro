@@ -6,6 +6,8 @@
 	let creating = $state(false);
 	let newTTL = $state(3600);
 	let newImage = $state('default');
+	let newVCPU = $state(1);
+	let newMemMiB = $state(256);
 
 	async function refresh() {
 		try {
@@ -20,32 +22,38 @@
 		try {
 			const res = await apiFetch('/sandboxes', {
 				method: 'POST',
-				body: JSON.stringify({ ttl: newTTL, image: newImage })
+				body: JSON.stringify({ ttl: newTTL, image: newImage, vcpu: newVCPU, mem_mib: newMemMiB }),
 			});
-			if (!res.ok) { const body = await res.json(); throw new Error(body.error); }
-			await refresh();
+			if (!res.ok) {
+				const data = await res.json();
+				error = data.error || `Error ${res.status}`;
+			} else {
+				error = '';
+				refresh();
+			}
 		} catch (e) { error = e.message; }
-		finally { creating = false; }
+		creating = false;
 	}
 
 	async function destroySandbox(id) {
-		try {
-			await apiFetch(`/sandboxes/${id}`, { method: 'DELETE' });
-			await refresh();
-		} catch (e) { error = e.message; }
+		await apiFetch(`/sandboxes/${id}`, { method: 'DELETE' });
+		refresh();
 	}
 
 	function formatTTL(expiresAt) {
-		const r = new Date(expiresAt) - new Date();
-		if (r <= 0) return 'expired';
-		const m = Math.floor(r / 60000), s = Math.floor((r % 60000) / 1000);
-		return m > 60 ? `${Math.floor(m/60)}h ${m%60}m` : `${m}m ${s}s`;
+		const remaining = new Date(expiresAt) - new Date();
+		if (remaining <= 0) return 'expired';
+		const mins = Math.floor(remaining / 60000);
+		const secs = Math.floor((remaining % 60000) / 1000);
+		if (mins > 60) return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+		return `${mins}m ${secs}s`;
 	}
 
-	function stateColor(state) {
-		if (state === 'running') return 'var(--tertiary)';
-		if (state === 'creating') return 'var(--primary)';
-		return 'var(--secondary)';
+	function stateBadgeClass(state) {
+		if (state === 'running') return 'badge-running';
+		if (state === 'creating') return 'badge-creating';
+		if (state === 'stopping') return 'badge-paused';
+		return 'badge-stopped';
 	}
 
 	refresh();
@@ -53,132 +61,122 @@
 </script>
 
 <div class="page-header">
-	<div>
-		<h1>VM Instances</h1>
-		<p class="subtitle">Manage ephemeral Firecracker micro-VM sandboxes</p>
-	</div>
-	<div class="count-badge">{sandboxes.length} active</div>
+	<h1>VM Instances</h1>
+	<span class="count">{sandboxes.length} active</span>
 </div>
 
 {#if error}
-	<div class="error-banner glass-panel">
-		<span class="material-symbols-outlined">error</span> {error}
+	<div class="error-banner">
+		<span class="material-symbols-outlined">error</span>
+		{error}
 	</div>
 {/if}
 
-<div class="provision-panel glass-panel">
-	<h3><span class="material-symbols-outlined" style="font-size:1.1rem; color: var(--primary)">add_circle</span> Provision New Sandbox</h3>
-	<div class="provision-fields">
+<div class="create-panel card">
+	<h3>Create New Sandbox</h3>
+	<div class="create-fields">
 		<div class="field">
-			<label>TTL (seconds)</label>
-			<input type="number" bind:value={newTTL} min="10" max="86400" />
+			<label for="image-select">Image</label>
+			<select id="image-select" bind:value={newImage}>
+				<option value="default">default</option>
+				<option value="minimal">minimal</option>
+				<option value="ubuntu">ubuntu</option>
+				<option value="python">python</option>
+				<option value="node">node</option>
+			</select>
 		</div>
 		<div class="field">
-			<label>Base Image</label>
-			<input type="text" bind:value={newImage} placeholder="default" />
+			<label for="ttl-input">TTL (seconds)</label>
+			<input id="ttl-input" type="number" bind:value={newTTL} min="10" max="86400" />
 		</div>
-		<button class="btn-primary" onclick={createSandbox} disabled={creating}>
-			{#if creating}
-				<span class="material-symbols-outlined spinning" style="font-size:1rem">progress_activity</span> Provisioning...
-			{:else}
-				<span class="material-symbols-outlined" style="font-size:1rem">rocket_launch</span> Launch
-			{/if}
-		</button>
+		<div class="field">
+			<label for="vcpu-input">vCPUs</label>
+			<input id="vcpu-input" type="number" bind:value={newVCPU} min="1" max="4" />
+		</div>
+		<div class="field">
+			<label for="mem-input">Memory (MiB)</label>
+			<input id="mem-input" type="number" bind:value={newMemMiB} min="128" max="2048" step="128" />
+		</div>
+		<div class="field field-action">
+			<button class="btn-primary" onclick={createSandbox} disabled={creating}>
+				{#if creating}
+					<span class="material-symbols-outlined spin" style="font-size:1rem;">progress_activity</span>
+					Provisioning...
+				{:else}
+					<span class="material-symbols-outlined" style="font-size:1rem;">rocket_launch</span>
+					Launch
+				{/if}
+			</button>
+		</div>
 	</div>
 </div>
 
 {#if sandboxes.length > 0}
-	<div class="vm-list">
-		{#each sandboxes as sb}
-			<div class="vm-card glass-panel">
-				<div class="vm-card-header">
-					<div class="vm-identity">
-						<span class="status-dot" style="background: {stateColor(sb.state)}; box-shadow: 0 0 8px {stateColor(sb.state)}"></span>
-						<div>
-							<div class="vm-id">{sb.id.slice(0, 12)}</div>
-							<div class="vm-meta">{sb.image} &middot; PID {sb.pid || '—'}</div>
-						</div>
-					</div>
-					<button class="btn-destroy" onclick={() => destroySandbox(sb.id)}>
-						<span class="material-symbols-outlined" style="font-size:1rem">stop_circle</span> Terminate
-					</button>
-				</div>
-				<div class="vm-card-stats">
-					<div class="stat">
-						<span class="stat-label">State</span>
-						<span class="stat-value" style="color: {stateColor(sb.state)}">{sb.state}</span>
-					</div>
-					<div class="stat">
-						<span class="stat-label">vSock CID</span>
-						<span class="stat-value">{sb.vsock_cid}</span>
-					</div>
-					<div class="stat">
-						<span class="stat-label">TTL Remaining</span>
-						<span class="stat-value">{formatTTL(sb.expires_at)}</span>
-					</div>
-					<div class="stat">
-						<span class="stat-label">Created</span>
-						<span class="stat-value">{new Date(sb.created_at).toLocaleTimeString()}</span>
-					</div>
-				</div>
-			</div>
-		{/each}
+	<div class="card" style="padding:0; overflow:hidden; margin-top:1rem;">
+		<table>
+			<thead>
+				<tr>
+					<th>Status</th>
+					<th>ID</th>
+					<th>Image</th>
+					<th>PID</th>
+					<th>CID</th>
+					<th>TTL</th>
+					<th>Actions</th>
+				</tr>
+			</thead>
+			<tbody>
+				{#each sandboxes as sb}
+					<tr>
+						<td>
+							<span class="badge {stateBadgeClass(sb.state)}">
+								<span class="status-dot {sb.state}" class:pulse={sb.state === 'running'}></span>
+								{sb.state.toUpperCase()}
+							</span>
+						</td>
+						<td><a href="/sandboxes/{sb.id}" class="mono">{sb.id.slice(0, 12)}</a></td>
+						<td>{sb.image}</td>
+						<td class="mono">{sb.pid || '—'}</td>
+						<td class="mono">{sb.vsock_cid}</td>
+						<td>{formatTTL(sb.expires_at)}</td>
+						<td>
+							<div class="action-btns">
+								<a href="/sandboxes/{sb.id}" class="btn-icon" title="Console">
+									<span class="material-symbols-outlined" style="font-size:1rem;">terminal</span>
+								</a>
+								<button class="btn-icon" style="color:var(--error); border-color:var(--error);" title="Terminate" onclick={() => destroySandbox(sb.id)}>
+									<span class="material-symbols-outlined" style="font-size:1rem;">delete</span>
+								</button>
+							</div>
+						</td>
+					</tr>
+				{/each}
+			</tbody>
+		</table>
 	</div>
 {:else}
-	<div class="empty-state glass-panel">
-		<span class="material-symbols-outlined" style="font-size: 3rem; color: var(--outline)">dns</span>
-		<h3>No instances running</h3>
-		<p>Launch a sandbox above to begin</p>
+	<div class="empty-state card" style="margin-top:1rem;">
+		<span class="material-symbols-outlined">cloud_off</span>
+		<h3>No active sandboxes</h3>
+		<p>Use the form above to provision a micro-VM</p>
 	</div>
 {/if}
 
 <style>
-	.page-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 2rem; }
-	h1 { font-family: var(--font-headline); font-size: 1.75rem; font-weight: 700; }
-	.subtitle { color: var(--on-surface-variant); font-size: 0.85rem; margin-top: 0.25rem; }
-	.count-badge { padding: 0.35rem 0.75rem; border-radius: 9999px; background: var(--surface-container-highest); color: var(--on-surface-variant); font-size: 0.75rem; font-weight: 600; }
+	.page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; }
+	h1 { font-family: var(--font-headline); font-size: 1.5rem; font-weight: 700; }
+	.count { font-size: 0.75rem; color: var(--on-surface-variant); background: var(--surface-container); padding: 0.2rem 0.6rem; border-radius: var(--radius-sm); }
 
-	.error-banner { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; margin-bottom: 1.5rem; color: var(--error); font-size: 0.85rem; }
-
-	.provision-panel { padding: 1.25rem; margin-bottom: 2rem; }
-	.provision-panel h3 { display: flex; align-items: center; gap: 0.5rem; font-family: var(--font-headline); font-size: 0.9rem; font-weight: 600; margin-bottom: 1rem; }
-	.provision-fields { display: flex; gap: 1rem; align-items: flex-end; }
+	.create-panel { margin-bottom: 0; }
+	.create-panel h3 { font-family: var(--font-headline); font-size: 0.9rem; font-weight: 600; margin-bottom: 0.75rem; }
+	.create-fields { display: flex; gap: 0.75rem; align-items: flex-end; flex-wrap: wrap; }
 	.field { display: flex; flex-direction: column; gap: 0.3rem; }
-	.field label { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--on-surface-variant); }
-	.field input { width: 160px; }
+	.field label { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--on-surface-variant); }
+	.field select, .field input { min-width: 120px; }
+	.field-action { align-self: flex-end; }
 
-	.btn-primary {
-		display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.55rem 1.25rem;
-		border-radius: 0.75rem; background: linear-gradient(135deg, var(--primary), var(--primary-dim));
-		color: #4a0076; font-weight: 600; font-size: 0.85rem;
-	}
-	.btn-primary:hover { opacity: 0.9; }
-	.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+	.action-btns { display: flex; gap: 0.25rem; }
 
 	@keyframes spin { to { transform: rotate(360deg); } }
-	:global(.spinning) { animation: spin 1s linear infinite; }
-
-	.vm-list { display: flex; flex-direction: column; gap: 0.75rem; }
-	.vm-card { padding: 1.25rem; }
-	.vm-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
-	.vm-identity { display: flex; align-items: center; gap: 0.75rem; }
-	.status-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-	.vm-id { font-family: var(--font-headline); font-size: 0.95rem; font-weight: 600; }
-	.vm-meta { font-size: 0.75rem; color: var(--on-surface-variant); }
-
-	.btn-destroy {
-		display: flex; align-items: center; gap: 0.35rem; padding: 0.4rem 0.75rem;
-		border-radius: 0.5rem; background: rgba(255, 110, 132, 0.1); color: var(--error);
-		font-size: 0.75rem; font-weight: 600;
-	}
-	.btn-destroy:hover { background: rgba(255, 110, 132, 0.2); }
-
-	.vm-card-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; }
-	.stat { display: flex; flex-direction: column; gap: 0.15rem; }
-	.stat-label { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--on-surface-variant); }
-	.stat-value { font-size: 0.85rem; font-weight: 600; }
-
-	.empty-state { display: flex; flex-direction: column; align-items: center; padding: 4rem; text-align: center; gap: 0.75rem; }
-	.empty-state h3 { font-family: var(--font-headline); font-size: 1.1rem; }
-	.empty-state p { color: var(--on-surface-variant); font-size: 0.85rem; }
+	.spin { animation: spin 1s linear infinite; }
 </style>

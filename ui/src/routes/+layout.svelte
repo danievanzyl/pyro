@@ -1,59 +1,66 @@
 <script>
 	import '../app.css';
-	import { afterNavigate } from '$app/navigation';
 	let { children } = $props();
 
 	const navItems = [
-		{ href: '/', icon: 'dashboard', label: 'Dashboard' },
-		{ href: '/sandboxes', icon: 'memory', label: 'VM Instances' },
-		{ href: '/images', icon: 'collections_bookmark', label: 'Images' },
-		{ href: '/audit', icon: 'description', label: 'System Logs' },
+		{ href: '/', icon: 'dashboard', label: 'Fleet' },
+		{ href: '/images', icon: 'inventory_2', label: 'Images' },
+		{ href: '/network', icon: 'lan', label: 'Network' },
+		{ href: '/audit', icon: 'receipt_long', label: 'Logs' },
 	];
 
 	let currentPath = $state('/');
 
-	afterNavigate(() => {
-		if (typeof window !== 'undefined') currentPath = window.location.pathname;
-	});
+	// Direct call — Svelte 5 tree-shakes afterNavigate in production
+	if (typeof window !== 'undefined') {
+		currentPath = window.location.pathname;
+		// Update on popstate (back/forward nav)
+		window.addEventListener('popstate', () => {
+			currentPath = window.location.pathname;
+		});
+	}
+
+	function isActive(href) {
+		if (href === '/') return currentPath === '/';
+		return currentPath.startsWith(href);
+	}
+
+	// Update currentPath on click navigation
+	function handleNavClick() {
+		setTimeout(() => {
+			if (typeof window !== 'undefined') currentPath = window.location.pathname;
+		}, 0);
+	}
 </script>
 
 <div class="shell">
-	<aside class="sidebar glass-panel">
-		<div class="brand">
-			<span class="material-symbols-outlined brand-icon">local_fire_department</span>
-			<div>
-				<div class="brand-name">firecrackerlacker</div>
-				<div class="brand-sub">Celestial Observer</div>
-			</div>
-		</div>
-
-		<nav class="nav-main">
-			{#each navItems as item}
-				<a
-					href={item.href}
-					class="nav-item"
-					class:active={currentPath === item.href}
-					>
-					<span class="material-symbols-outlined">{item.icon}</span>
-					{item.label}
-				</a>
-			{/each}
-		</nav>
-
-		<div class="nav-spacer"></div>
-
-		<a href="/sandboxes" class="provision-btn">
-			<span class="material-symbols-outlined">add</span>
-			Provision VM
-		</a>
-
-		<nav class="nav-secondary">
-			<a href="https://github.com/danievanzyl/firecrackerlacker" class="nav-item" target="_blank">
-				<span class="material-symbols-outlined">menu_book</span>
-				Documentation
+	<header class="topbar">
+		<div class="topbar-left">
+			<a href="/" class="brand" onclick={handleNavClick}>
+				<span class="material-symbols-outlined brand-icon">local_fire_department</span>
+				<span class="brand-name">firecrackerlacker</span>
 			</a>
-		</nav>
-	</aside>
+			<nav class="nav-tabs">
+				{#each navItems as item}
+					<a
+						href={item.href}
+						class="nav-tab"
+						class:active={isActive(item.href)}
+						onclick={handleNavClick}
+					>
+						<span class="material-symbols-outlined">{item.icon}</span>
+						{item.label}
+					</a>
+				{/each}
+			</nav>
+		</div>
+		<div class="topbar-right">
+			<a href="/sandboxes" class="btn-primary" onclick={handleNavClick}>
+				<span class="material-symbols-outlined" style="font-size:1rem;">add</span>
+				New VM
+			</a>
+		</div>
+	</header>
 
 	<main class="content">
 		{@render children()}
@@ -63,91 +70,84 @@
 <style>
 	.shell {
 		display: flex;
+		flex-direction: column;
 		min-height: 100vh;
 	}
 
-	.sidebar {
-		width: 260px;
-		padding: 1.5rem 1rem;
+	.topbar {
 		display: flex;
-		flex-direction: column;
-		position: fixed;
+		align-items: center;
+		justify-content: space-between;
+		padding: 0 1.5rem;
+		height: 56px;
+		border-bottom: 1px solid var(--surface-container);
+		background: #ffffff;
+		position: sticky;
 		top: 0;
-		left: 0;
-		bottom: 0;
 		z-index: 10;
-		border-radius: 0;
-		border-right: 1px solid rgba(73, 70, 81, 0.2);
-		border-top: none;
-		border-bottom: none;
-		border-left: none;
+	}
+
+	.topbar-left {
+		display: flex;
+		align-items: center;
+		gap: 2rem;
+	}
+	.topbar-right {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
 	}
 
 	.brand {
 		display: flex;
 		align-items: center;
-		gap: 0.75rem;
-		padding: 0.5rem;
-		margin-bottom: 2rem;
+		gap: 0.5rem;
+		text-decoration: none;
+		color: var(--on-surface);
 	}
-	.brand-icon { font-size: 1.75rem; color: var(--primary); }
+	.brand:hover { text-decoration: none; }
+	.brand-icon { font-size: 1.5rem; color: var(--primary); }
 	.brand-name {
 		font-family: var(--font-headline);
 		font-weight: 700;
 		font-size: 0.95rem;
 	}
-	.brand-sub {
-		font-size: 0.7rem;
-		color: var(--on-surface-variant);
-		letter-spacing: 0.05em;
-	}
 
-	.nav-main, .nav-secondary {
-		display: flex;
-		flex-direction: column;
-		gap: 0.25rem;
-	}
-	.nav-spacer { flex: 1; }
-
-	.nav-item {
+	.nav-tabs {
 		display: flex;
 		align-items: center;
-		gap: 0.75rem;
-		padding: 0.6rem 0.75rem;
-		border-radius: 0.5rem;
-		font-size: 0.85rem;
+		gap: 0;
+		height: 56px;
+	}
+	.nav-tab {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		padding: 0 1rem;
+		height: 100%;
+		font-size: 0.8rem;
+		font-weight: 500;
 		color: var(--on-surface-variant);
 		text-decoration: none;
+		border-bottom: 2px solid transparent;
 		transition: all 0.15s;
 	}
-	.nav-item:hover {
-		background: var(--surface-container-high);
+	.nav-tab:hover {
 		color: var(--on-surface);
+		background: var(--surface-container-low);
 		text-decoration: none;
 	}
-	.nav-item.active {
-		background: rgba(163, 67, 231, 0.15);
+	.nav-tab.active {
 		color: var(--primary);
+		border-bottom-color: var(--primary);
 	}
-	.nav-item :global(.material-symbols-outlined) { font-size: 1.25rem; }
-
-	.provision-btn {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-		padding: 0.65rem 1rem;
-		margin: 1rem 0.5rem;
-		border-radius: 0.75rem;
-		background: linear-gradient(135deg, var(--primary), var(--primary-dim));
-		color: #4a0076;
-		font-weight: 600;
-		font-size: 0.85rem;
-	}
-	.provision-btn:hover { opacity: 0.9; }
+	.nav-tab :global(.material-symbols-outlined) { font-size: 1.15rem; }
 
 	.content {
 		flex: 1;
-		margin-left: 260px;
-		padding: 2rem 2.5rem;
+		padding: 1.5rem 2rem;
+		max-width: 1400px;
+		margin: 0 auto;
+		width: 100%;
 	}
 </style>

@@ -47,6 +47,12 @@ func main() {
 		promEnabled    = flag.Bool("prometheus", true, "Enable Prometheus /metrics endpoint")
 		maxPerKey      = flag.Int("max-per-key", 10, "Max concurrent sandboxes per API key")
 		rateLimit      = flag.Int("rate-limit", 30, "Max sandbox creates per minute per key")
+		maxVCPU        = flag.Int("max-vcpu", 4, "Max vCPUs per sandbox")
+		maxMemMiB      = flag.Int("max-mem-mib", 2048, "Max memory per sandbox (MiB)")
+		defaultVCPU    = flag.Int("default-vcpu", 1, "Default vCPUs per sandbox")
+		defaultMemMiB  = flag.Int("default-mem-mib", 256, "Default memory per sandbox (MiB)")
+		poolSize       = flag.Int("pool-size", 0, "Snapshot pool size per image (0 = disabled)")
+		snapshotDir    = flag.String("snapshot-dir", "/var/lib/firecrackerlacker/snapshots", "Snapshot pool directory")
 	)
 	flag.Parse()
 
@@ -82,10 +88,16 @@ func main() {
 		JailerBin:      *jailerBin,
 		KernelPath:     *kernelPath,
 		DefaultRootfs:  *rootfsPath,
+		ImagesDir:      *imagesDir,
 		BridgeName:     *bridgeName,
 		VsockAgentPort: 1024,
 		ExecTimeout:    *execTimeout,
 		MaxSandboxes:   *maxSandboxes,
+		MaxVCPU:        *maxVCPU,
+		MaxMemMiB:      *maxMemMiB,
+		DefaultVCPU:    *defaultVCPU,
+		DefaultMemMiB:  *defaultMemMiB,
+		Metrics:        metrics,
 	}, st, log)
 	if err != nil {
 		log.Error("create sandbox manager", "err", err)
@@ -118,6 +130,23 @@ func main() {
 	reaper := sandbox.NewReaper(mgr, *reaperInterval, log)
 	go reaper.Run(reaperCtx)
 
+	// Start snapshot pool (if enabled).
+	var pool *sandbox.Pool
+	if *poolSize > 0 {
+		var err error
+		pool, err = sandbox.NewPool(sandbox.PoolConfig{
+			TargetSize:        *poolSize,
+			SnapshotDir:       *snapshotDir,
+			ReplenishInterval: 10 * time.Second,
+		}, mgr, log)
+		if err != nil {
+			log.Error("snapshot pool init failed", "err", err)
+		} else {
+			mgr.SetPool(pool)
+			go pool.Run(reaperCtx)
+		}
+	}
+
 	// Embedded UI.
 	uiFS, err := fs.Sub(firecrackerlacker.UIBuild, "ui/build")
 	if err != nil {
@@ -136,9 +165,13 @@ func main() {
 			case <-reaperCtx.Done():
 				return
 			case <-ticker.C:
-				eventBus.Publish("health.tick", map[string]any{
+				tick := map[string]any{
 					"active_sandboxes": mgr.ActiveCount(),
-				})
+				}
+				if pool != nil {
+					tick["pool_stats"] = pool.Stats()
+				}
+				eventBus.Publish("health.tick", tick)
 			}
 		}
 	}()
@@ -150,6 +183,7 @@ func main() {
 		ImageMgr: imgMgr,
 		UIFS:     uiFS,
 		EventBus: eventBus,
+		Pool:     pool,
 	})
 	httpServer := &http.Server{
 		Addr:         *listenAddr,

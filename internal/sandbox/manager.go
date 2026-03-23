@@ -48,6 +48,10 @@ type Config struct {
 	// DefaultRootfs is the path to the default rootfs ext4 image.
 	DefaultRootfs string
 
+	// ImagesDir is the directory containing image subdirectories.
+	// Each image has {ImagesDir}/{name}/rootfs.ext4.
+	ImagesDir string
+
 	// BridgeName is the network bridge for VM tap devices.
 	BridgeName string
 
@@ -59,6 +63,23 @@ type Config struct {
 
 	// MaxSandboxes is the maximum number of concurrent sandboxes.
 	MaxSandboxes int
+
+	// MaxVCPU is the max vCPUs per sandbox (0 = no limit).
+	MaxVCPU int
+
+	// MaxMemMiB is the max memory per sandbox in MiB (0 = no limit).
+	MaxMemMiB int
+
+	// DefaultVCPU is the default vCPU count when not specified.
+	DefaultVCPU int
+
+	// DefaultMemMiB is the default memory in MiB when not specified.
+	DefaultMemMiB int
+
+	// Metrics for recording phase timings (optional).
+	Metrics interface {
+		RecordCreatePhase(ctx context.Context, image, phase string, duration time.Duration)
+	}
 }
 
 // Manager handles Firecracker VM lifecycle operations.
@@ -66,12 +87,18 @@ type Manager struct {
 	cfg   Config
 	store *store.Store
 	log   *slog.Logger
+	pool  *Pool
 
 	nextCID atomic.Uint32
 
 	mu       sync.RWMutex
 	active   map[string]*vmHandle // sandbox ID → handle
 	stopping bool
+}
+
+// SetPool attaches a snapshot pool to the manager.
+func (m *Manager) SetPool(p *Pool) {
+	m.pool = p
 }
 
 // vmHandle holds runtime state for a running VM.
@@ -111,8 +138,14 @@ func (m *Manager) ActiveCount() int {
 	return len(m.active)
 }
 
+// VMResources holds configurable VM resources.
+type VMResources struct {
+	VCPU   int // 0 = use default
+	MemMiB int // 0 = use default
+}
+
 // CreateSandbox provisions a new Firecracker microVM.
-func (m *Manager) CreateSandbox(ctx context.Context, apiKeyID, image string, ttl time.Duration) (*store.Sandbox, error) {
+func (m *Manager) CreateSandbox(ctx context.Context, apiKeyID, image string, ttl time.Duration, res VMResources) (*store.Sandbox, error) {
 	createStart := time.Now()
 	if m.ActiveCount() >= m.cfg.MaxSandboxes {
 		return nil, fmt.Errorf("at capacity: %d/%d sandboxes running", m.ActiveCount(), m.cfg.MaxSandboxes)
@@ -159,26 +192,68 @@ func (m *Manager) CreateSandbox(ctx context.Context, apiKeyID, image string, ttl
 
 	m.log.Info("create: network done", "id", id[:8], "elapsed", time.Since(createStart))
 
+	// Resolve rootfs: try image-specific path first, fall back to default.
+	sourceRootfs := m.cfg.DefaultRootfs
+	if m.cfg.ImagesDir != "" && image != "" {
+		imgRootfs := filepath.Join(m.cfg.ImagesDir, image, "rootfs.ext4")
+		if _, err := os.Stat(imgRootfs); err == nil {
+			sourceRootfs = imgRootfs
+		}
+	}
+
 	// Copy rootfs for this sandbox (each VM needs its own writable copy).
+	rootfsStart := time.Now()
 	rootfsPath := filepath.Join(stateDir, "rootfs.ext4")
-	if err := copyFile(m.cfg.DefaultRootfs, rootfsPath); err != nil {
+	if err := copyFile(sourceRootfs, rootfsPath); err != nil {
 		m.cleanupNetworking(tapDevice)
 		m.store.UpdateSandboxState(ctx, id, store.StateDestroyed)
 		os.RemoveAll(stateDir)
 		return nil, fmt.Errorf("copy rootfs: %w", err)
 	}
+	rootfsDur := time.Since(rootfsStart)
+	if m.cfg.Metrics != nil {
+		m.cfg.Metrics.RecordCreatePhase(ctx, image, "rootfs_copy", rootfsDur)
+	}
 
 	m.log.Info("create: rootfs copied", "id", id[:8], "elapsed", time.Since(createStart))
 
-	// Spawn Firecracker via jailer.
+	// Resolve VM resources: request override → config defaults.
+	vcpu := res.VCPU
+	if vcpu == 0 {
+		vcpu = m.cfg.DefaultVCPU
+	}
+	if vcpu == 0 {
+		vcpu = 1
+	}
+	memMiB := res.MemMiB
+	if memMiB == 0 {
+		memMiB = m.cfg.DefaultMemMiB
+	}
+	if memMiB == 0 {
+		memMiB = 256
+	}
+	// Enforce limits.
+	if m.cfg.MaxVCPU > 0 && vcpu > m.cfg.MaxVCPU {
+		vcpu = m.cfg.MaxVCPU
+	}
+	if m.cfg.MaxMemMiB > 0 && memMiB > m.cfg.MaxMemMiB {
+		memMiB = m.cfg.MaxMemMiB
+	}
+
+	// Spawn Firecracker.
+	spawnStart := time.Now()
 	vmCtx, vmCancel := context.WithCancel(context.Background())
-	cmd, err := m.spawnFirecracker(vmCtx, sb, rootfsPath)
+	cmd, err := m.spawnFirecracker(vmCtx, sb, rootfsPath, vcpu, memMiB)
 	if err != nil {
 		vmCancel()
 		m.cleanupNetworking(tapDevice)
 		m.store.UpdateSandboxState(ctx, id, store.StateDestroyed)
 		os.RemoveAll(stateDir)
 		return nil, fmt.Errorf("spawn firecracker: %w", err)
+	}
+	spawnDur := time.Since(spawnStart)
+	if m.cfg.Metrics != nil {
+		m.cfg.Metrics.RecordCreatePhase(ctx, image, "spawn", spawnDur)
 	}
 
 	sb.PID = cmd.Process.Pid
@@ -193,13 +268,19 @@ func (m *Manager) CreateSandbox(ctx context.Context, apiKeyID, image string, ttl
 	m.log.Info("create: firecracker spawned", "id", id[:8], "pid", cmd.Process.Pid, "elapsed", time.Since(createStart))
 
 	// Wait for vsock agent to become ready.
-	if err := m.waitForAgent(sb, 5*time.Second); err != nil {
+	agentStart := time.Now()
+	if err := m.waitForAgent(sb, 15*time.Second); err != nil {
 		vmCancel()
 		m.killProcess(cmd)
 		m.cleanupNetworking(tapDevice)
 		m.store.UpdateSandboxState(ctx, id, store.StateDestroyed)
 		os.RemoveAll(stateDir)
 		return nil, fmt.Errorf("agent not ready: %w", err)
+	}
+
+	agentDur := time.Since(agentStart)
+	if m.cfg.Metrics != nil {
+		m.cfg.Metrics.RecordCreatePhase(ctx, image, "agent_wait", agentDur)
 	}
 
 	sb.State = store.StateRunning
@@ -391,8 +472,8 @@ func (m *Manager) Shutdown(ctx context.Context) {
 	}
 }
 
-// spawnFirecracker starts a Firecracker process via jailer.
-func (m *Manager) spawnFirecracker(ctx context.Context, sb *store.Sandbox, rootfsPath string) (*exec.Cmd, error) {
+// spawnFirecracker starts a Firecracker process.
+func (m *Manager) spawnFirecracker(ctx context.Context, sb *store.Sandbox, rootfsPath string, vcpu, memMiB int) (*exec.Cmd, error) {
 	// Build the Firecracker config JSON and write to state dir.
 	configPath := filepath.Join(sb.StateDir, "vm-config.json")
 	config := fmt.Sprintf(`{
@@ -407,8 +488,8 @@ func (m *Manager) spawnFirecracker(ctx context.Context, sb *store.Sandbox, rootf
     "is_read_only": false
   }],
   "machine-config": {
-    "vcpu_count": 1,
-    "mem_size_mib": 256
+    "vcpu_count": %d,
+    "mem_size_mib": %d
   },
   "network-interfaces": [{
     "iface_id": "eth0",
@@ -419,7 +500,7 @@ func (m *Manager) spawnFirecracker(ctx context.Context, sb *store.Sandbox, rootf
     "guest_cid": %d,
     "uds_path": %q
   }
-}`, m.cfg.KernelPath, rootfsPath, sb.TapDevice, sb.VsockCID,
+}`, m.cfg.KernelPath, rootfsPath, vcpu, memMiB, sb.TapDevice, sb.VsockCID,
 		filepath.Join(sb.StateDir, "vsock.sock"))
 
 	if err := os.WriteFile(configPath, []byte(config), 0640); err != nil {
@@ -457,9 +538,18 @@ func (m *Manager) spawnFirecracker(ctx context.Context, sb *store.Sandbox, rootf
 	return cmd, nil
 }
 
+// WaitForAgentAt polls the vsock agent at a given UDS path until it responds.
+func (m *Manager) WaitForAgentAt(stateDir string, timeout time.Duration) error {
+	udsPath := filepath.Join(stateDir, "vsock.sock")
+	return m.waitForAgentUDS(udsPath, timeout)
+}
+
 // waitForAgent polls the vsock agent until it responds to a ping.
 func (m *Manager) waitForAgent(sb *store.Sandbox, timeout time.Duration) error {
-	udsPath := filepath.Join(sb.StateDir, "vsock.sock")
+	return m.waitForAgentUDS(filepath.Join(sb.StateDir, "vsock.sock"), timeout)
+}
+
+func (m *Manager) waitForAgentUDS(udsPath string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		conn, err := dialVsockUDS(udsPath, m.cfg.VsockAgentPort)

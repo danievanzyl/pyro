@@ -17,6 +17,7 @@ import (
 	"github.com/danievanzyl/firecrackerlacker/internal/store"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // ServerConfig holds optional dependencies for the API server.
@@ -26,6 +27,7 @@ type ServerConfig struct {
 	ImageMgr *sandbox.ImageManager
 	UIFS     fs.FS // embedded SvelteKit build
 	EventBus *EventBus
+	Pool     *sandbox.Pool
 }
 
 // Server is the HTTP API server.
@@ -39,6 +41,7 @@ type Server struct {
 	imageMgr *sandbox.ImageManager
 	uiFS     fs.FS
 	eventBus *EventBus
+	pool     *sandbox.Pool
 }
 
 // NewServer creates an API server.
@@ -54,6 +57,7 @@ func NewServer(manager *sandbox.Manager, st *store.Store, log *slog.Logger, cfg 
 		s.imageMgr = cfg.ImageMgr
 		s.uiFS = cfg.UIFS
 		s.eventBus = cfg.EventBus
+		s.pool = cfg.Pool
 	}
 	s.setupRoutes()
 	return s
@@ -112,6 +116,11 @@ func (s *Server) setupRoutes() {
 	// Backward compat: /health without /api prefix.
 	r.Get("/health", s.handleHealth)
 
+	// Prometheus metrics endpoint.
+	if s.metrics != nil {
+		r.Handle("/metrics", promhttp.Handler())
+	}
+
 	// Embedded UI (must be last — catch-all for SPA routing).
 	if s.uiFS != nil {
 		SetupUIRoutes(r, s.uiFS)
@@ -121,16 +130,22 @@ func (s *Server) setupRoutes() {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"status":           "ok",
 		"active_sandboxes": s.manager.ActiveCount(),
-	})
+	}
+	if s.pool != nil {
+		resp["pool_stats"] = s.pool.Stats()
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // CreateSandboxRequest is the request body for POST /sandboxes.
 type CreateSandboxRequest struct {
-	TTL   int    `json:"ttl"`   // seconds
-	Image string `json:"image"` // rootfs image name (default: "default")
+	TTL    int    `json:"ttl"`              // seconds
+	Image  string `json:"image"`            // rootfs image name (default: "default")
+	VCPU   int    `json:"vcpu,omitempty"`   // vCPU count (0 = image/server default)
+	MemMiB int    `json:"mem_mib,omitempty"` // memory in MiB (0 = image/server default)
 }
 
 func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
@@ -166,9 +181,19 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := time.Now()
-	sb, err := s.manager.CreateSandbox(r.Context(), ak.ID, image, ttl)
+	sb, err := s.manager.CreateSandbox(r.Context(), ak.ID, image, ttl, sandbox.VMResources{
+		VCPU:   req.VCPU,
+		MemMiB: req.MemMiB,
+	})
 	if err != nil {
 		s.log.Error("create sandbox failed", "err", err)
+		if s.metrics != nil {
+			reason := "internal"
+			if isCapacityError(err) {
+				reason = "capacity"
+			}
+			s.metrics.RecordCreateFailed(r.Context(), image, reason)
+		}
 		if isCapacityError(err) {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
 			return

@@ -35,6 +35,10 @@ type PoolConfig struct {
 
 	// ReplenishInterval is how often to check and refill the pool.
 	ReplenishInterval time.Duration
+
+	// Images is the list of images to maintain warm pools for.
+	// If empty, discovers from ImagesDir.
+	Images []string
 }
 
 // snapshot represents a pre-warmed VM snapshot ready for fast restore.
@@ -114,12 +118,21 @@ func (p *Pool) Stats() map[string]int {
 
 // Run starts the pool replenishment loop. Blocks until ctx is cancelled.
 func (p *Pool) Run(ctx context.Context) {
+	images := p.cfg.Images
+	if len(images) == 0 {
+		// Discover images from ImagesDir.
+		images = p.discoverImages()
+	}
+
 	p.log.Info("snapshot pool started",
 		"target_size", p.cfg.TargetSize,
+		"images", images,
 		"interval", p.cfg.ReplenishInterval)
 
 	// Initial fill.
-	p.replenish(ctx, "default")
+	for _, img := range images {
+		p.replenish(ctx, img)
+	}
 
 	ticker := time.NewTicker(p.cfg.ReplenishInterval)
 	defer ticker.Stop()
@@ -130,9 +143,38 @@ func (p *Pool) Run(ctx context.Context) {
 			p.log.Info("snapshot pool stopped")
 			return
 		case <-ticker.C:
-			p.replenish(ctx, "default")
+			for _, img := range images {
+				p.replenish(ctx, img)
+			}
 		}
 	}
+}
+
+// discoverImages finds available image directories.
+func (p *Pool) discoverImages() []string {
+	dir := p.manager.cfg.ImagesDir
+	if dir == "" {
+		return []string{"default"}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return []string{"default"}
+	}
+	var images []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		// Check rootfs exists.
+		rootfs := filepath.Join(dir, e.Name(), "rootfs.ext4")
+		if _, err := os.Stat(rootfs); err == nil {
+			images = append(images, e.Name())
+		}
+	}
+	if len(images) == 0 {
+		return []string{"default"}
+	}
+	return images
 }
 
 // replenish creates snapshots until the pool reaches target size for an image.
@@ -190,9 +232,18 @@ func (p *Pool) createSnapshot(ctx context.Context, image string) (*snapshot, err
 
 	socketPath := filepath.Join(stateDir, "firecracker.sock")
 
+	// Resolve image-specific rootfs.
+	sourceRootfs := p.manager.cfg.DefaultRootfs
+	if p.manager.cfg.ImagesDir != "" && image != "" {
+		imgRootfs := filepath.Join(p.manager.cfg.ImagesDir, image, "rootfs.ext4")
+		if _, err := os.Stat(imgRootfs); err == nil {
+			sourceRootfs = imgRootfs
+		}
+	}
+
 	// Copy rootfs.
 	rootfsPath := filepath.Join(stateDir, "rootfs.ext4")
-	if err := copyFile(p.manager.cfg.DefaultRootfs, rootfsPath); err != nil {
+	if err := copyFile(sourceRootfs, rootfsPath); err != nil {
 		os.RemoveAll(snapDir)
 		return nil, fmt.Errorf("copy rootfs: %w", err)
 	}
@@ -203,7 +254,7 @@ func (p *Pool) createSnapshot(ctx context.Context, image string) (*snapshot, err
 		vsockCID:   cid,
 		stateDir:   stateDir,
 		rootfs:     rootfsPath,
-		tapDevice:  fmt.Sprintf("tap-snap-%s", id[5:13]),
+		tapDevice:  fmt.Sprintf("taps%d", cid),
 	}
 
 	// Setup networking for the temp VM.
@@ -255,29 +306,12 @@ func (p *Pool) createSnapshot(ctx context.Context, image string) (*snapshot, err
 		return nil, fmt.Errorf("start firecracker: %w", err)
 	}
 
-	// Wait for agent.
-	agentReady := make(chan error, 1)
-	go func() {
-		// Simple vsock ping loop.
-		deadline := time.Now().Add(5 * time.Second)
-		for time.Now().Before(deadline) {
-			time.Sleep(200 * time.Millisecond)
-			conn, err := p.manager.dialVsock(cid, p.manager.cfg.VsockAgentPort)
-			if err != nil {
-				continue
-			}
-			conn.Close()
-			agentReady <- nil
-			return
-		}
-		agentReady <- fmt.Errorf("agent timeout")
-	}()
-
-	if err := <-agentReady; err != nil {
+	// Wait for agent using proper ping protocol.
+	if err := p.manager.WaitForAgentAt(stateDir, 15*time.Second); err != nil {
 		cmd.Process.Kill()
 		p.manager.cleanupNetworking(tempSB.tapDevice)
 		os.RemoveAll(snapDir)
-		return nil, err
+		return nil, fmt.Errorf("agent timeout: %w", err)
 	}
 
 	// Pause the VM before snapshotting.
