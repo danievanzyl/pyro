@@ -643,7 +643,7 @@ func dialVsockUDS(udsPath string, port uint32) (net.Conn, error) {
 	return conn, nil
 }
 
-// setupNetworking creates a tap device and attaches it to the bridge.
+// setupNetworking creates a tap device, attaches it to the bridge, and isolates it.
 func (m *Manager) setupNetworking(tapDevice string) error {
 	// Create tap device.
 	if err := runCmd("ip", "tuntap", "add", tapDevice, "mode", "tap"); err != nil {
@@ -660,6 +660,10 @@ func (m *Manager) setupNetworking(tapDevice string) error {
 	if err := runCmd("ip", "link", "set", tapDevice, "up"); err != nil {
 		return fmt.Errorf("bring up %s: %w", tapDevice, err)
 	}
+
+	// Isolate: bridge port isolation prevents VMs from talking to each other.
+	// They can only reach the bridge gateway (host), not other TAP ports.
+	runCmd("bridge", "link", "set", "dev", tapDevice, "isolated", "on")
 
 	return nil
 }
