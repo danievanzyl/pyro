@@ -24,19 +24,19 @@
 - [x] Test audit log populates on create/exec/destroy
 - [x] Test quota enforcement (exceed max-per-key, verify 429)
 - [x] Test TTL reaper auto-destroy (10s TTL sandbox → verified auto-destroyed)
-- [ ] Deploy + test embedded UI served from Go binary on :8080
-- [ ] Test SSE real-time events in dashboard
-- [ ] Test orphan recovery (kill server, restart, verify VM reclaimed or cleaned)
-- [ ] Test WebSocket streaming exec
-- [ ] Test network isolation iptables policies
-- [ ] Test snapshot pool warm boot
+- [x] Deploy + test embedded UI served from Go binary on :8080
+- [x] Test SSE real-time events in dashboard
+- [x] Test orphan recovery (kill server, restart, verify VM reclaimed or cleaned)
+- [x] Test WebSocket streaming exec
+- [x] Test network isolation iptables policies
+- [x] Test snapshot pool warm boot
 
 ## Pre-Public
 
 - [x] Remove ssh root@homelab.local targets from Makefile
 - [x] Add README.md
 - [x] Add LICENSE
-- [ ] CI: GitHub Actions for go test + go build
+- [x] CI: GitHub Actions for go test + go build
 
 ## Deferred
 
