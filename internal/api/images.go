@@ -47,6 +47,10 @@ func handleListImages(imgMgr *sandbox.ImageManager) http.HandlerFunc {
 func handleGetImage(imgMgr *sandbox.ImageManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "name")
+		if !validName.MatchString(name) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid image name"})
+			return
+		}
 		info, err := imgMgr.Get(name)
 		if err != nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "image not found"})
@@ -71,6 +75,10 @@ func handleCreateImage(imgMgr *sandbox.ImageManager) http.HandlerFunc {
 		}
 		if req.Name == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+			return
+		}
+		if !validName.MatchString(req.Name) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid image name"})
 			return
 		}
 		if req.Dockerfile == "" {

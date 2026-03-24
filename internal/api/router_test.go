@@ -108,6 +108,46 @@ func TestHealthEndpoint(t *testing.T) {
 	})
 }
 
+func TestValidName(t *testing.T) {
+	valid := []string{"python", "node", "ubuntu", "my-image", "python-3.12", "node_22", "a", "A1"}
+	for _, name := range valid {
+		if !validName.MatchString(name) {
+			t.Errorf("expected %q to be valid", name)
+		}
+	}
+
+	invalid := []string{"", "../etc", "../../bin", "my image", "$evil", "foo;bar", "foo/bar",
+		".hidden", "-start", "_start", strings.Repeat("a", 65)}
+	for _, name := range invalid {
+		if validName.MatchString(name) {
+			t.Errorf("expected %q to be invalid", name)
+		}
+	}
+}
+
+func TestValidateEnvKeys(t *testing.T) {
+	// Valid keys.
+	if msg := validateEnvKeys(map[string]string{"PATH": "/usr/bin", "MY_VAR": "val"}); msg != "" {
+		t.Errorf("expected valid, got %q", msg)
+	}
+	if msg := validateEnvKeys(nil); msg != "" {
+		t.Errorf("expected nil map valid, got %q", msg)
+	}
+
+	// Invalid: key with =.
+	if msg := validateEnvKeys(map[string]string{"FOO=BAR": "val"}); msg == "" {
+		t.Error("expected error for key with =")
+	}
+	// Invalid: empty key.
+	if msg := validateEnvKeys(map[string]string{"": "val"}); msg == "" {
+		t.Error("expected error for empty key")
+	}
+	// Invalid: null byte.
+	if msg := validateEnvKeys(map[string]string{"FOO\x00BAR": "val"}); msg == "" {
+		t.Error("expected error for key with null byte")
+	}
+}
+
 func TestCreateSandboxValidation(t *testing.T) {
 	// Test request validation (doesn't need a real manager).
 	tests := []struct {
@@ -120,6 +160,13 @@ func TestCreateSandboxValidation(t *testing.T) {
 		{"negative ttl", `{"ttl":-1}`, http.StatusBadRequest},
 		{"ttl too large", `{"ttl":100000}`, http.StatusBadRequest},
 		{"invalid json", `{bad`, http.StatusBadRequest},
+		// Image name validation.
+		{"path traversal image", `{"ttl":60,"image":"../etc"}`, http.StatusBadRequest},
+		{"dot-dot image", `{"ttl":60,"image":"../../bin"}`, http.StatusBadRequest},
+		{"space in image", `{"ttl":60,"image":"my image"}`, http.StatusBadRequest},
+		{"dollar in image", `{"ttl":60,"image":"$evil"}`, http.StatusBadRequest},
+		{"semicolon in image", `{"ttl":60,"image":"foo;bar"}`, http.StatusBadRequest},
+		{"slash in image", `{"ttl":60,"image":"foo/bar"}`, http.StatusBadRequest},
 	}
 
 	for _, tt := range tests {

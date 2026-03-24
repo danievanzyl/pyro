@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -202,6 +203,14 @@ func (m *Manager) CreateSandbox(ctx context.Context, apiKeyID, image string, ttl
 	sourceRootfs := m.cfg.DefaultRootfs
 	if m.cfg.ImagesDir != "" && image != "" {
 		imgRootfs := filepath.Join(m.cfg.ImagesDir, image, "rootfs.ext4")
+		// Guard against path traversal: resolved path must stay under ImagesDir.
+		absImagesDir, _ := filepath.Abs(m.cfg.ImagesDir)
+		absImgRootfs, _ := filepath.Abs(imgRootfs)
+		if !strings.HasPrefix(absImgRootfs, absImagesDir+string(filepath.Separator)) {
+			m.store.UpdateSandboxState(ctx, id, store.StateDestroyed)
+			os.RemoveAll(stateDir)
+			return nil, fmt.Errorf("invalid image path")
+		}
 		if _, err := os.Stat(imgRootfs); err == nil {
 			sourceRootfs = imgRootfs
 		}

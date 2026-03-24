@@ -31,9 +31,41 @@ import (
 )
 
 const (
-	agentVersion = "0.1.0"
-	listenPort   = 1024
+	agentVersion    = "0.1.0"
+	listenPort      = 1024
+	maxOutputBytes  = 4 << 20 // 4 MiB per stream (stdout/stderr) — keeps total under 10 MiB protocol limit
+	maxFileReadSize = 7 << 20 // 7 MiB — base64 encoded fits in 10 MiB protocol message
 )
+
+// limitedWriter caps writes at maxBytes, discarding further data.
+type limitedWriter struct {
+	buf       strings.Builder
+	maxBytes  int
+	truncated bool
+}
+
+func (w *limitedWriter) Write(p []byte) (int, error) {
+	if w.truncated {
+		return len(p), nil // discard silently, report full consumption
+	}
+	remaining := w.maxBytes - w.buf.Len()
+	if len(p) <= remaining {
+		return w.buf.Write(p)
+	}
+	// Write what fits, then mark truncated.
+	if remaining > 0 {
+		w.buf.Write(p[:remaining])
+	}
+	w.truncated = true
+	return len(p), nil
+}
+
+func (w *limitedWriter) String() string {
+	if w.truncated {
+		return w.buf.String() + "\n...[truncated at 4MB]"
+	}
+	return w.buf.String()
+}
 
 func main() {
 	// If running as PID 1 (init), mount essential filesystems first.
@@ -132,9 +164,10 @@ func handleExec(conn net.Conn, msg *protocol.Envelope, log *slog.Logger) {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
 	}
 
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := &limitedWriter{maxBytes: maxOutputBytes}
+	stderr := &limitedWriter{maxBytes: maxOutputBytes}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	exitCode := 0
 	if err := cmd.Run(); err != nil {
@@ -242,6 +275,10 @@ func handleFileRead(conn net.Conn, msg *protocol.Envelope, log *slog.Logger) {
 	info, err := os.Stat(absPath)
 	if err != nil {
 		sendError(conn, fmt.Sprintf("stat file: %v", err))
+		return
+	}
+	if info.Size() > maxFileReadSize {
+		sendError(conn, fmt.Sprintf("file too large: %d bytes (max %d)", info.Size(), maxFileReadSize))
 		return
 	}
 

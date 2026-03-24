@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -20,6 +21,28 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+// validName matches safe image/resource names: alphanumeric start, then alphanumeric/dot/hyphen/underscore, max 64 chars.
+var validName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
+
+// maxRequestBody limits JSON request body size to prevent OOM from oversized payloads.
+const maxRequestBody = 1 << 20 // 1 MiB
+
+// validateEnvKeys rejects env var keys that contain '=' or are empty.
+func validateEnvKeys(env map[string]string) string {
+	for k := range env {
+		if k == "" {
+			return "env key must not be empty"
+		}
+		if strings.Contains(k, "=") {
+			return "env key must not contain '='"
+		}
+		if strings.ContainsAny(k, "\x00") {
+			return "env key must not contain null bytes"
+		}
+	}
+	return ""
+}
 
 // ServerConfig holds optional dependencies for the API server.
 type ServerConfig struct {
@@ -152,7 +175,7 @@ type CreateSandboxRequest struct {
 
 func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 	var req CreateSandboxRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxRequestBody)).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 		return
 	}
@@ -169,6 +192,10 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 	image := req.Image
 	if image == "" {
 		image = "default"
+	}
+	if !validName.MatchString(image) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid image name"})
+		return
 	}
 
 	// Resolve kernel version — empty means latest.
@@ -345,12 +372,16 @@ func (s *Server) handleExecInSandbox(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req ExecRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxRequestBody)).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 		return
 	}
 	if len(req.Command) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "command is required"})
+		return
+	}
+	if msg := validateEnvKeys(req.Env); msg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
 		return
 	}
 

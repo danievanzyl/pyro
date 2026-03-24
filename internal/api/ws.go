@@ -113,6 +113,10 @@ func handleWebSocketExec(mgr *sandbox.Manager, st *store.Store, log *slog.Logger
 				sendWSError(conn, "command is required", log)
 				continue
 			}
+			if msg := validateEnvKeys(req.Env); msg != "" {
+				sendWSError(conn, msg, log)
+				continue
+			}
 
 			// Execute command via vsock (sync for now, Phase 2 adds true streaming).
 			timeout := 300 * time.Second
