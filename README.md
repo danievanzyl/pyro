@@ -1,6 +1,11 @@
-# Pyro
+<p align="center">
+  <img src="assets/logo.svg" alt="Pyro" width="200" />
+</p>
 
-Open-source Firecracker microVM sandbox platform for AI agents. Spin up isolated Linux VMs in milliseconds via API, run code, and tear them down.
+<p align="center">
+  Open-source Firecracker microVM sandbox platform for AI agents.<br>
+  Spin up isolated Linux VMs in milliseconds via API, run code, and tear them down.
+</p>
 
 ## Features
 
