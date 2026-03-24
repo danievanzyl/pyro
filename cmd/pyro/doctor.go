@@ -11,7 +11,7 @@ import (
 )
 
 func doctor() {
-	fmt.Println("Pyro Doctor — checking system readiness\n")
+	fmt.Println("Pyro Doctor — checking system readiness")
 	ok := true
 
 	// 1. KVM
