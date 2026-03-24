@@ -8,6 +8,7 @@ ui/build/
 ui/.svelte-kit/
 ui/bun.lock
 *.png
+!assets/*.png
 .playwright-mcp/
 .gstack/
 /fcctl
