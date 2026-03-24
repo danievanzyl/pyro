@@ -5,6 +5,10 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+  id-token: write
+
 jobs:
   publish-python:
     name: Publish Python SDK to PyPI
@@ -12,8 +16,6 @@ jobs:
     defaults:
       run:
         working-directory: sdk/python
-    permissions:
-      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
