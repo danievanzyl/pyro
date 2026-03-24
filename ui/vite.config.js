@@ -6,7 +6,7 @@ export default defineConfig({
 	server: {
 		proxy: {
 			'/api': {
-				target: 'http://homelab.local:8080',
+				target: process.env.PYRO_BASE_URL || 'http://localhost:8080',
 				rewrite: (path) => path.replace(/^\/api/, '')
 			}
 		}

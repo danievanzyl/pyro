@@ -10,7 +10,7 @@ import pytest_asyncio
 from pyro_sdk import Pyro, AuthError, SandboxNotFoundError
 
 
-BASE_URL = os.environ.get("PYRO_BASE_URL", "http://192.168.1.20:8080")
+BASE_URL = os.environ.get("PYRO_BASE_URL", "http://localhost:8080")
 API_KEY = os.environ.get("PYRO_API_KEY", "")
 
 

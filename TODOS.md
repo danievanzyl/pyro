@@ -33,9 +33,9 @@
 
 ## Pre-Public
 
-- [ ] Remove ssh root@homelab.local targets from Makefile
-- [ ] Add README.md
-- [ ] Add LICENSE
+- [x] Remove ssh root@homelab.local targets from Makefile
+- [x] Add README.md
+- [x] Add LICENSE
 - [ ] CI: GitHub Actions for go test + go build
 
 ## Deferred

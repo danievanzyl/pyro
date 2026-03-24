@@ -7,7 +7,7 @@
 import { describe, it, expect } from "vitest";
 import { Pyro, AuthError, SandboxNotFoundError } from "../src/index.js";
 
-const BASE_URL = process.env.PYRO_BASE_URL ?? "http://192.168.1.20:8080";
+const BASE_URL = process.env.PYRO_BASE_URL ?? "http://localhost:8080";
 const API_KEY = process.env.PYRO_API_KEY ?? "";
 
 const client = new Pyro({ apiKey: API_KEY, baseUrl: BASE_URL, timeout: 30_000 });

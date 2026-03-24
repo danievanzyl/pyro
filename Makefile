@@ -1,4 +1,4 @@
-REMOTE_HOST := root@homelab.local
+REMOTE_HOST ?= root@your-host
 REMOTE_DIR := /opt/pyro
 
 .PHONY: build build-server build-agent build-cli test test-unit clean deploy deploy-bin deploy-agent deploy-service deploy-rootfs test-integration ssh
@@ -33,8 +33,7 @@ build-linux: build-ui
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/linux/pyro-agent ./cmd/agent
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/linux/pyro ./cmd/pyro
 
-# Deploy all binaries to KVM host
-# TODO: remove ssh targets before publishing to github public
+# Deploy all binaries to KVM host (set REMOTE_HOST=user@host)
 deploy: build-linux
 	ssh $(REMOTE_HOST) 'mkdir -p $(REMOTE_DIR)/bin $(REMOTE_DIR)/images'
 	scp bin/linux/pyro-server $(REMOTE_HOST):$(REMOTE_DIR)/bin/
