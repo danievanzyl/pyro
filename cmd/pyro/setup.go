@@ -25,6 +25,16 @@ func setup() {
 	fmt.Println("==> pyro setup")
 	fmt.Printf("    base: %s\n", baseDir)
 
+	// 0. Check KVM
+	fmt.Println("\n==> Checking KVM")
+	if _, err := os.Stat("/dev/kvm"); err != nil {
+		fmt.Fprintln(os.Stderr, "error: /dev/kvm not found — Firecracker requires KVM")
+		fmt.Fprintln(os.Stderr, "  bare metal: enable VT-x/AMD-V in BIOS")
+		fmt.Fprintln(os.Stderr, "  VM: enable nested virtualization on the host")
+		os.Exit(1)
+	}
+	fmt.Println("    /dev/kvm ok")
+
 	// 1. Create directory structure
 	fmt.Println("\n==> Creating directories")
 	for _, d := range []string{"bin", "images", "state", "db"} {
@@ -190,7 +200,7 @@ func detectWanIface() string {
 
 func installService(baseDir string) {
 	service := fmt.Sprintf(`[Unit]
-Description=Firecrackerlacker API Server
+Description=pyro - agentic sandbox platform
 After=network.target
 
 [Service]
