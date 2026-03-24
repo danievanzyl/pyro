@@ -8,7 +8,7 @@ Open-source Firecracker microVM sandbox platform for AI agents.
 - `internal/` packages: api, sandbox, protocol, store
 - SQLite for state, vsock for host↔guest communication
 - JSON-over-length-prefix wire protocol
-- Python SDK: `sdk/python/` — `pyro-sdk` on PyPI
+- Python SDK: `sdk/python/` — `pyrovm-sdk` on PyPI
 - TypeScript SDK: `sdk/typescript/` — `@pyrovm/sdk` on npm
 
 ## Build

@@ -5,7 +5,7 @@ Gives an LLM agent the ability to execute code in a sandboxed environment.
 Usage:
     export PYRO_API_KEY=pk_...
     export OPENAI_API_KEY=sk-...
-    pip install pyro-sdk langchain langchain-openai
+    pip install pyrovm-sdk langchain langchain-openai
     python main.py
 """
 

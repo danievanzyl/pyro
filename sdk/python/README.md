@@ -1,11 +1,11 @@
-# pyro-sdk
+# pyrovm-sdk
 
 Python SDK for [Pyro](https://github.com/danievanzyl/pyro) — the open-source sandbox platform for AI agents.
 
 ## Install
 
 ```bash
-pip install pyro-sdk
+pip install pyrovm-sdk
 ```
 
 ## Quickstart

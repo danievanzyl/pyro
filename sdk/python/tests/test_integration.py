@@ -1,4 +1,4 @@
-"""Integration tests for pyro-sdk against a live Pyro server.
+"""Integration tests for pyrovm-sdk against a live Pyro server.
 
 Requires PYRO_API_KEY and PYRO_BASE_URL env vars.
 """
