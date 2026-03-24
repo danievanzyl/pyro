@@ -505,7 +505,7 @@ func (m *Manager) spawnFirecracker(ctx context.Context, sb *store.Sandbox, rootf
     "guest_cid": %d,
     "uds_path": %q
   }
-}`, kernelPath, sb.VsockCID, rootfsPath, vcpu, memMiB, sb.VsockCID, sb.TapDevice, sb.VsockCID,
+}`, kernelPath, sb.VsockCID, rootfsPath, vcpu, memMiB, sb.VsockCID&0xFF, sb.TapDevice, sb.VsockCID,
 		filepath.Join(sb.StateDir, "vsock.sock"))
 
 	if err := os.WriteFile(configPath, []byte(config), 0640); err != nil {

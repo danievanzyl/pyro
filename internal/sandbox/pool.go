@@ -326,7 +326,7 @@ func (p *Pool) createSnapshot(ctx context.Context, image string) (*snapshot, err
     "guest_cid": %d,
     "uds_path": %q
   }
-}`, cid, rootfsPath, cid, tempSB.tapDevice, cid,
+}`, p.manager.cfg.KernelPath, cid, rootfsPath, cid&0xFF, tempSB.tapDevice, cid,
 		filepath.Join(stateDir, "vsock.sock"))
 
 	if err := os.WriteFile(configPath, []byte(config), 0640); err != nil {
