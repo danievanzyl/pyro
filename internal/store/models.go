@@ -34,7 +34,7 @@ type APIKey struct {
 	Key       string    `json:"key"`
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"created_at"`
-	ExpiresAt time.Time `json:"expires_at,omitempty"`
+	ExpiresAt time.Time `json:"expires_at,omitzero"`
 }
 
 // IsExpired returns true if the sandbox TTL has passed.

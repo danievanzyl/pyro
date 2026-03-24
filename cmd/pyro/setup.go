@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/danievanzyl/pyro/internal/store"
@@ -27,7 +28,10 @@ func setup() {
 	// 1. Create directory structure
 	fmt.Println("\n==> Creating directories")
 	for _, d := range []string{"bin", "images", "state", "db"} {
-		os.MkdirAll(filepath.Join(baseDir, d), 0755)
+		if err := os.MkdirAll(filepath.Join(baseDir, d), 0755); err != nil {
+			fmt.Fprintf(os.Stderr, "error: mkdir %s: %v\n", d, err)
+			os.Exit(1)
+		}
 	}
 	fmt.Println("    done")
 
@@ -76,12 +80,21 @@ func setup() {
 		// default exists — check if it's already a symlink
 		if target, err := os.Readlink(defaultDir); err != nil || target != minimalDir {
 			// backup existing default
-			os.Rename(defaultDir, defaultDir+".bak")
-			os.Symlink(minimalDir, defaultDir)
+			if err := os.Rename(defaultDir, defaultDir+".bak"); err != nil {
+				fmt.Fprintf(os.Stderr, "error: rename default: %v\n", err)
+				os.Exit(1)
+			}
+			if err := os.Symlink(minimalDir, defaultDir); err != nil {
+				fmt.Fprintf(os.Stderr, "error: symlink default: %v\n", err)
+				os.Exit(1)
+			}
 			fmt.Println("\n==> default → minimal (old default backed up)")
 		}
 	} else {
-		os.Symlink(minimalDir, defaultDir)
+		if err := os.Symlink(minimalDir, defaultDir); err != nil {
+			fmt.Fprintf(os.Stderr, "error: symlink default: %v\n", err)
+			os.Exit(1)
+		}
 		fmt.Println("\n==> default → minimal")
 	}
 
@@ -132,7 +145,10 @@ func installFirecracker(baseDir string) {
 	run("wget", "-q", "--show-progress", "-O", tarPath, url)
 	run("tar", "-xzf", tarPath, "-C", "/tmp")
 	run("mv", fmt.Sprintf("/tmp/release-%s-x86_64/firecracker-%s-x86_64", version, version), "/usr/local/bin/firecracker")
-	os.Chmod("/usr/local/bin/firecracker", 0755)
+	if err := os.Chmod("/usr/local/bin/firecracker", 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "error: chmod firecracker: %v\n", err)
+		os.Exit(1)
+	}
 	os.Remove(tarPath)
 	fmt.Println("    installed firecracker", version)
 }
@@ -149,7 +165,10 @@ func setupBridge() {
 	run("ip", "link", "set", "fcbr0", "up")
 
 	// Enable IP forwarding
-	os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0644)
+	if err := os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "error: enable ip_forward: %v\n", err)
+		os.Exit(1)
+	}
 
 	// NAT
 	wanIface := detectWanIface()
@@ -166,7 +185,7 @@ func detectWanIface() string {
 	if err != nil {
 		return ""
 	}
-	return string(out[:len(out)-1]) // trim newline
+	return strings.TrimSuffix(string(out), "\n")
 }
 
 func installService(baseDir string) {
@@ -190,7 +209,10 @@ RestartSec=5
 WantedBy=multi-user.target
 `, baseDir, baseDir, baseDir, baseDir)
 
-	os.WriteFile("/etc/systemd/system/pyro.service", []byte(service), 0644)
+	if err := os.WriteFile("/etc/systemd/system/pyro.service", []byte(service), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "error: write systemd service: %v\n", err)
+		os.Exit(1)
+	}
 	run("systemctl", "daemon-reload")
 	run("systemctl", "enable", "pyro")
 	fmt.Println("    systemd service installed + enabled")

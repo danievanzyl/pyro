@@ -1,7 +1,6 @@
 package store
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,7 +20,7 @@ func testStore(t *testing.T) *Store {
 
 func TestCreateAndGetSandbox(t *testing.T) {
 	s := testStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	sb := &Sandbox{
 		ID:         "sb-1",
@@ -62,7 +61,7 @@ func TestCreateAndGetSandbox(t *testing.T) {
 
 func TestGetSandboxNotFound(t *testing.T) {
 	s := testStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	got, err := s.GetSandbox(ctx, "nonexistent")
 	if err != nil {
@@ -75,7 +74,7 @@ func TestGetSandboxNotFound(t *testing.T) {
 
 func TestListSandboxes(t *testing.T) {
 	s := testStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	for i := range 3 {
 		sb := &Sandbox{
@@ -115,7 +114,7 @@ func TestListSandboxes(t *testing.T) {
 
 func TestGetExpiredSandboxes(t *testing.T) {
 	s := testStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Expired + running.
 	s.CreateSandbox(ctx, &Sandbox{
@@ -156,7 +155,7 @@ func TestGetExpiredSandboxes(t *testing.T) {
 
 func TestUpdateSandboxState(t *testing.T) {
 	s := testStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	s.CreateSandbox(ctx, &Sandbox{
 		ID:        "sb-1",
@@ -178,7 +177,7 @@ func TestUpdateSandboxState(t *testing.T) {
 
 func TestUpdateSandboxStateNotFound(t *testing.T) {
 	s := testStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	err := s.UpdateSandboxState(ctx, "nonexistent", StateRunning)
 	if err == nil {
@@ -188,7 +187,7 @@ func TestUpdateSandboxStateNotFound(t *testing.T) {
 
 func TestAPIKeyLifecycle(t *testing.T) {
 	s := testStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	ak := &APIKey{
 		ID:        "ak-1",
@@ -214,7 +213,7 @@ func TestAPIKeyLifecycle(t *testing.T) {
 
 func TestAPIKeyNotFound(t *testing.T) {
 	s := testStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	got, err := s.ValidateAPIKey(ctx, "nonexistent")
 	if err != nil {
@@ -227,7 +226,7 @@ func TestAPIKeyNotFound(t *testing.T) {
 
 func TestAPIKeyExpired(t *testing.T) {
 	s := testStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	ak := &APIKey{
 		ID:        "ak-expired",
@@ -275,7 +274,7 @@ func TestSandboxRemainingTTL(t *testing.T) {
 
 func TestGetAllActiveSandboxes(t *testing.T) {
 	s := testStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	s.CreateSandbox(ctx, &Sandbox{ID: "sb-1", APIKeyID: "k", State: StateRunning, CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Hour)})
 	s.CreateSandbox(ctx, &Sandbox{ID: "sb-2", APIKeyID: "k", State: StateCreating, CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Hour)})

@@ -67,7 +67,7 @@ func (r *Reaper) tick(ctx context.Context) {
 			continue
 		}
 
-		r.manager.store.LogAudit(ctx, &store.AuditEntry{
+		_ = r.manager.store.LogAudit(ctx, &store.AuditEntry{
 			Action:    store.AuditSandboxExpired,
 			APIKeyID:  sb.APIKeyID,
 			SandboxID: sb.ID,

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -221,7 +222,7 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Audit log + SSE event.
-	s.store.LogAudit(r.Context(), &store.AuditEntry{
+	_ = s.store.LogAudit(r.Context(), &store.AuditEntry{
 		Action:    store.AuditSandboxCreated,
 		APIKeyID:  ak.ID,
 		SandboxID: sb.ID,
@@ -299,7 +300,7 @@ func (s *Server) handleDeleteSandbox(w http.ResponseWriter, r *http.Request) {
 	if s.metrics != nil {
 		s.metrics.RecordSandboxDestroyed(r.Context(), "manual", sb.RemainingTTL())
 	}
-	s.store.LogAudit(r.Context(), &store.AuditEntry{
+	_ = s.store.LogAudit(r.Context(), &store.AuditEntry{
 		Action: store.AuditSandboxDestroyed, APIKeyID: ak.ID, SandboxID: id, Detail: "reason=manual",
 	})
 	s.publishEvent("sandbox.destroyed", map[string]string{"id": id, "reason": "manual"})
@@ -371,7 +372,7 @@ func (s *Server) handleExecInSandbox(w http.ResponseWriter, r *http.Request) {
 	if s.metrics != nil {
 		s.metrics.RecordExec(r.Context(), time.Since(start), resp.ExitCode)
 	}
-	s.store.LogAudit(r.Context(), &store.AuditEntry{
+	_ = s.store.LogAudit(r.Context(), &store.AuditEntry{
 		Action: store.AuditSandboxExec, APIKeyID: ak.ID, SandboxID: id,
 		Detail: fmt.Sprintf("cmd=%s exit=%d", strings.Join(req.Command, " "), resp.ExitCode),
 	})
@@ -419,7 +420,7 @@ func (s *Server) handleFileWrite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ak := APIKeyFromContext(r.Context())
-	s.store.LogAudit(r.Context(), &store.AuditEntry{
+	_ = s.store.LogAudit(r.Context(), &store.AuditEntry{
 		Action: store.AuditSandboxFileWrite, APIKeyID: ak.ID, SandboxID: id,
 		Detail: fmt.Sprintf("path=%s bytes=%d", filePath, resp.BytesWritten),
 	})
@@ -450,7 +451,7 @@ func (s *Server) handleFileRead(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ak := APIKeyFromContext(r.Context())
-	s.store.LogAudit(r.Context(), &store.AuditEntry{
+	_ = s.store.LogAudit(r.Context(), &store.AuditEntry{
 		Action: store.AuditSandboxFileRead, APIKeyID: ak.ID, SandboxID: id,
 		Detail: fmt.Sprintf("path=%s size=%d", filePath, resp.Size),
 	})
@@ -459,7 +460,7 @@ func (s *Server) handleFileRead(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-File-Mode", fmt.Sprintf("%o", resp.Mode))
 	w.Header().Set("X-File-Size", fmt.Sprintf("%d", resp.Size))
 	w.WriteHeader(http.StatusOK)
-	w.Write(data)
+	_, _ = w.Write(data)
 }
 
 // requireRunningSandbox validates ownership and state, writes error response if invalid.
@@ -492,14 +493,11 @@ func (s *Server) requireRunningSandbox(w http.ResponseWriter, r *http.Request, i
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
-// ErrAtCapacity is returned when the sandbox manager can't create more VMs.
-var ErrAtCapacity = fmt.Errorf("at capacity")
-
 func isCapacityError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "at capacity")
+	return errors.Is(err, sandbox.ErrAtCapacity)
 }
 
 func (s *Server) publishEvent(eventType string, data any) {

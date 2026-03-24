@@ -100,17 +100,17 @@ func handleWebSocketExec(mgr *sandbox.Manager, st *store.Store, log *slog.Logger
 
 			var req wsExecRequest
 			if err := json.Unmarshal(msg, &req); err != nil {
-				sendWSError(conn, "invalid JSON: "+err.Error())
+				sendWSError(conn, "invalid JSON: "+err.Error(), log)
 				continue
 			}
 
 			if req.Type != "exec" {
-				sendWSError(conn, "unknown message type: "+req.Type)
+				sendWSError(conn, "unknown message type: "+req.Type, log)
 				continue
 			}
 
 			if len(req.Command) == 0 {
-				sendWSError(conn, "command is required")
+				sendWSError(conn, "command is required", log)
 				continue
 			}
 
@@ -132,32 +132,36 @@ func handleWebSocketExec(mgr *sandbox.Manager, st *store.Store, log *slog.Logger
 			cancel()
 
 			if err != nil {
-				sendWSError(conn, "exec failed: "+err.Error())
+				sendWSError(conn, "exec failed: "+err.Error(), log)
 				continue
 			}
 
 			// Send stdout.
 			if resp.Stdout != "" {
-				sendWSOutput(conn, "stdout", resp.Stdout, 0)
+				sendWSOutput(conn, "stdout", resp.Stdout, 0, log)
 			}
 			// Send stderr.
 			if resp.Stderr != "" {
-				sendWSOutput(conn, "stderr", resp.Stderr, 0)
+				sendWSOutput(conn, "stderr", resp.Stderr, 0, log)
 			}
 			// Send exit code.
-			sendWSOutput(conn, "exit", "", resp.ExitCode)
+			sendWSOutput(conn, "exit", "", resp.ExitCode, log)
 		}
 	}
 }
 
-func sendWSOutput(conn *websocket.Conn, typ, data string, exitCode int) {
+func sendWSOutput(conn *websocket.Conn, typ, data string, exitCode int, log *slog.Logger) {
 	out := wsExecOutput{Type: typ, Data: data, ExitCode: exitCode}
 	msg, _ := json.Marshal(out)
-	conn.WriteMessage(websocket.TextMessage, msg)
+	if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+		log.Error("ws write", "type", typ, "err", err)
+	}
 }
 
-func sendWSError(conn *websocket.Conn, message string) {
+func sendWSError(conn *websocket.Conn, message string, log *slog.Logger) {
 	out := wsExecOutput{Type: "error", Data: message}
 	msg, _ := json.Marshal(out)
-	conn.WriteMessage(websocket.TextMessage, msg)
+	if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+		log.Error("ws write error", "err", err)
+	}
 }

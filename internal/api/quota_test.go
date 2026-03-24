@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -12,12 +11,12 @@ func TestQuotaEnforcerTTLLimit(t *testing.T) {
 	st := setupTestStore(t)
 	qe := NewQuotaEnforcer(st, QuotaConfig{MaxTTL: 3600})
 
-	err := qe.CheckCreateQuota(context.Background(), "test-key-id", 7200)
+	err := qe.CheckCreateQuota(t.Context(), "test-key-id", 7200)
 	if err == nil {
 		t.Fatal("expected TTL quota error")
 	}
 
-	err = qe.CheckCreateQuota(context.Background(), "test-key-id", 3600)
+	err = qe.CheckCreateQuota(t.Context(), "test-key-id", 3600)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -25,7 +24,7 @@ func TestQuotaEnforcerTTLLimit(t *testing.T) {
 
 func TestQuotaEnforcerConcurrentLimit(t *testing.T) {
 	st := setupTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	qe := NewQuotaEnforcer(st, QuotaConfig{MaxConcurrentSandboxes: 2, MaxTTL: 86400})
 
@@ -48,7 +47,7 @@ func TestQuotaEnforcerConcurrentLimit(t *testing.T) {
 
 func TestQuotaEnforcerRateLimit(t *testing.T) {
 	st := setupTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	qe := NewQuotaEnforcer(st, QuotaConfig{RateLimit: 3, MaxTTL: 86400})
 

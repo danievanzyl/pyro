@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -124,8 +125,5 @@ func fail(msg string)          { fmt.Printf("\033[31m✗\033[0m %s\n", msg) }
 func warn(msg string)          { fmt.Printf("\033[33m!\033[0m %s\n", msg) }
 
 func trimNL(b []byte) string {
-	if len(b) > 0 && b[len(b)-1] == '\n' {
-		return string(b[:len(b)-1])
-	}
-	return string(b)
+	return strings.TrimSuffix(string(b), "\n")
 }

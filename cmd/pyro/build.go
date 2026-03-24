@@ -213,7 +213,10 @@ func buildFromOCI(name, ociRef string, sizeMB int, postPkgs []string, postCmds [
 		"size":   sizeMB,
 	}
 	metaJSON, _ := json.MarshalIndent(meta, "", "  ")
-	os.WriteFile(filepath.Join(imgDir, "image.json"), metaJSON, 0644)
+	if err := os.WriteFile(filepath.Join(imgDir, "image.json"), metaJSON, 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "error: write image.json: %v\n", err)
+		os.Exit(1)
+	}
 
 	fmt.Printf("==> %s image complete\n", name)
 }
@@ -278,7 +281,7 @@ func buildMinimal() {
 		"false", "yes", "nohup", "ping", "nc", "ifconfig", "route",
 	}
 	for _, l := range links {
-		os.Symlink("/bin/busybox", filepath.Join(mnt, "bin", l))
+		_ = os.Symlink("/bin/busybox", filepath.Join(mnt, "bin", l))
 	}
 
 	installAgent(mnt)
@@ -291,7 +294,10 @@ func buildMinimal() {
 
 	meta := map[string]any{"name": "minimal", "source": "busybox-static", "size": 50}
 	metaJSON, _ := json.MarshalIndent(meta, "", "  ")
-	os.WriteFile(filepath.Join(imgDir, "image.json"), metaJSON, 0644)
+	if err := os.WriteFile(filepath.Join(imgDir, "image.json"), metaJSON, 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "error: write image.json: %v\n", err)
+		os.Exit(1)
+	}
 
 	fmt.Println("==> Minimal image complete")
 }
@@ -465,6 +471,12 @@ func cp(src, dst string) {
 }
 
 func writeFile(path, content string) {
-	os.MkdirAll(filepath.Dir(path), 0755)
-	os.WriteFile(path, []byte(content), 0644)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "error: mkdir %s: %v\n", filepath.Dir(path), err)
+		os.Exit(1)
+	}
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "error: write %s: %v\n", path, err)
+		os.Exit(1)
+	}
 }

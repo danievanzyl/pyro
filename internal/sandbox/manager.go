@@ -11,10 +11,12 @@
 package sandbox
 
 import (
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
-	"log/slog"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -138,6 +140,9 @@ func (m *Manager) ActiveCount() int {
 	return len(m.active)
 }
 
+// ErrAtCapacity is returned when the sandbox manager can't create more VMs.
+var ErrAtCapacity = errors.New("at capacity")
+
 // VMResources holds configurable VM resources.
 type VMResources struct {
 	VCPU       int    // 0 = use default
@@ -149,7 +154,7 @@ type VMResources struct {
 func (m *Manager) CreateSandbox(ctx context.Context, apiKeyID, image string, ttl time.Duration, res VMResources) (*store.Sandbox, error) {
 	createStart := time.Now()
 	if m.ActiveCount() >= m.cfg.MaxSandboxes {
-		return nil, fmt.Errorf("at capacity: %d/%d sandboxes running", m.ActiveCount(), m.cfg.MaxSandboxes)
+		return nil, fmt.Errorf("%w: %d/%d sandboxes running", ErrAtCapacity, m.ActiveCount(), m.cfg.MaxSandboxes)
 	}
 
 	id := uuid.New().String()
@@ -219,20 +224,8 @@ func (m *Manager) CreateSandbox(ctx context.Context, apiKeyID, image string, ttl
 	m.log.Info("create: rootfs copied", "id", id[:8], "elapsed", time.Since(createStart))
 
 	// Resolve VM resources: request override → config defaults.
-	vcpu := res.VCPU
-	if vcpu == 0 {
-		vcpu = m.cfg.DefaultVCPU
-	}
-	if vcpu == 0 {
-		vcpu = 1
-	}
-	memMiB := res.MemMiB
-	if memMiB == 0 {
-		memMiB = m.cfg.DefaultMemMiB
-	}
-	if memMiB == 0 {
-		memMiB = 256
-	}
+	vcpu := cmp.Or(res.VCPU, m.cfg.DefaultVCPU, 1)
+	memMiB := cmp.Or(res.MemMiB, m.cfg.DefaultMemMiB, 256)
 	// Enforce limits.
 	if m.cfg.MaxVCPU > 0 && vcpu > m.cfg.MaxVCPU {
 		vcpu = m.cfg.MaxVCPU
@@ -522,8 +515,15 @@ func (m *Manager) spawnFirecracker(ctx context.Context, sb *store.Sandbox, rootf
 	cmd.Dir = sb.StateDir
 
 	// Log stdout/stderr to files.
-	stdout, _ := os.Create(filepath.Join(sb.StateDir, "stdout.log"))
-	stderr, _ := os.Create(filepath.Join(sb.StateDir, "stderr.log"))
+	stdout, err := os.Create(filepath.Join(sb.StateDir, "stdout.log"))
+	if err != nil {
+		return nil, fmt.Errorf("create stdout log: %w", err)
+	}
+	stderr, err := os.Create(filepath.Join(sb.StateDir, "stderr.log"))
+	if err != nil {
+		stdout.Close()
+		return nil, fmt.Errorf("create stderr log: %w", err)
+	}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -195,7 +196,7 @@ func (s *Store) ValidateAPIKey(ctx context.Context, key string) (*APIKey, error)
 	ak := &APIKey{}
 	var expiresAt sql.NullTime
 	err := row.Scan(&ak.ID, &ak.Key, &ak.Name, &ak.CreatedAt, &expiresAt)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -234,7 +235,7 @@ func scanSandbox(row *sql.Row) (*Sandbox, error) {
 		&sb.SocketPath, &sb.VsockCID, &sb.TapDevice, &sb.IP,
 		&sb.CreatedAt, &sb.ExpiresAt, &sb.StateDir,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	return sb, err

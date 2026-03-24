@@ -28,8 +28,8 @@ func AuthMiddleware(st *store.Store) func(http.Handler) http.Handler {
 				return
 			}
 
-			key := strings.TrimPrefix(header, "Bearer ")
-			if key == header {
+			_, key, ok := strings.Cut(header, "Bearer ")
+			if !ok {
 				http.Error(w, `{"error":"invalid Authorization format, expected Bearer <token>"}`, http.StatusUnauthorized)
 				return
 			}

@@ -1,13 +1,12 @@
 package store
 
 import (
-	"context"
 	"testing"
 )
 
 func TestAuditLogCRUD(t *testing.T) {
 	s := testStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Log some entries.
 	s.LogAudit(ctx, &AuditEntry{
@@ -63,7 +62,7 @@ func TestAuditLogCRUD(t *testing.T) {
 
 func TestAuditLogLimit(t *testing.T) {
 	s := testStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	for range 5 {
 		s.LogAudit(ctx, &AuditEntry{Action: AuditSandboxCreated, APIKeyID: "k"})

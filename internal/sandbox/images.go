@@ -18,12 +18,15 @@
 package sandbox
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -80,10 +83,10 @@ func (im *ImageManager) ListKernels() ([]*KernelInfo, error) {
 			continue
 		}
 		name := entry.Name()
-		if len(name) < 8 || name[:8] != "vmlinux-" {
+		version, ok := strings.CutPrefix(name, "vmlinux-")
+		if !ok {
 			continue
 		}
-		version := name[8:]
 		path := filepath.Join(im.cfg.ImagesDir, name)
 		info, err := entry.Info()
 		if err != nil {
@@ -97,13 +100,9 @@ func (im *ImageManager) ListKernels() ([]*KernelInfo, error) {
 	}
 
 	// Sort descending by version string (higher versions first).
-	for i := 0; i < len(kernels); i++ {
-		for j := i + 1; j < len(kernels); j++ {
-			if kernels[j].Version > kernels[i].Version {
-				kernels[i], kernels[j] = kernels[j], kernels[i]
-			}
-		}
-	}
+	slices.SortFunc(kernels, func(a, b *KernelInfo) int {
+		return cmp.Compare(b.Version, a.Version)
+	})
 
 	return kernels, nil
 }

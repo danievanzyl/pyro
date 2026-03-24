@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -76,7 +77,7 @@ func handleConnection(conn net.Conn, log *slog.Logger) {
 
 	switch msg.Type {
 	case protocol.TypePingRequest:
-		handlePing(conn)
+		handlePing(conn, log)
 	case protocol.TypeExecRequest:
 		handleExec(conn, msg, log)
 	case protocol.TypeFileWriteRequest:
@@ -88,14 +89,16 @@ func handleConnection(conn net.Conn, log *slog.Logger) {
 	}
 }
 
-func handlePing(conn net.Conn) {
+func handlePing(conn net.Conn, log *slog.Logger) {
 	resp := &protocol.Envelope{
 		Type: protocol.TypePingResponse,
 		Payload: &protocol.PingResponse{
 			Version: agentVersion,
 		},
 	}
-	protocol.WriteMessage(conn, resp)
+	if err := protocol.WriteMessage(conn, resp); err != nil {
+		log.Error("write ping response", "err", err)
+	}
 }
 
 func handleExec(conn net.Conn, msg *protocol.Envelope, log *slog.Logger) {
@@ -135,7 +138,8 @@ func handleExec(conn net.Conn, msg *protocol.Envelope, log *slog.Logger) {
 
 	exitCode := 0
 	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitCode()
 		} else {
 			sendError(conn, fmt.Sprintf("exec error: %v", err))
@@ -151,7 +155,9 @@ func handleExec(conn net.Conn, msg *protocol.Envelope, log *slog.Logger) {
 			Stderr:   stderr.String(),
 		},
 	}
-	protocol.WriteMessage(conn, resp)
+	if err := protocol.WriteMessage(conn, resp); err != nil {
+		log.Error("write exec response", "err", err)
+	}
 }
 
 func handleFileWrite(conn net.Conn, msg *protocol.Envelope, log *slog.Logger) {
@@ -208,7 +214,9 @@ func handleFileWrite(conn net.Conn, msg *protocol.Envelope, log *slog.Logger) {
 			BytesWritten: len(data),
 		},
 	}
-	protocol.WriteMessage(conn, resp)
+	if err := protocol.WriteMessage(conn, resp); err != nil {
+		log.Error("write file-write response", "err", err)
+	}
 }
 
 func handleFileRead(conn net.Conn, msg *protocol.Envelope, log *slog.Logger) {
@@ -251,7 +259,9 @@ func handleFileRead(conn net.Conn, msg *protocol.Envelope, log *slog.Logger) {
 			Mode:    int(info.Mode()),
 		},
 	}
-	protocol.WriteMessage(conn, resp)
+	if err := protocol.WriteMessage(conn, resp); err != nil {
+		log.Error("write file-read response", "err", err)
+	}
 }
 
 func sendError(conn net.Conn, message string) {
@@ -261,7 +271,9 @@ func sendError(conn net.Conn, message string) {
 			Message: message,
 		},
 	}
-	protocol.WriteMessage(conn, resp)
+	if err := protocol.WriteMessage(conn, resp); err != nil {
+		slog.Error("write error response", "err", err)
+	}
 }
 
 // initAsInit performs minimal init duties when running as PID 1.

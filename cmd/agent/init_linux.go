@@ -34,7 +34,7 @@ func initAsInit() {
 		}
 		// DNS
 		os.MkdirAll("/etc", 0755)
-		os.WriteFile("/etc/resolv.conf", []byte("nameserver 1.1.1.1\nnameserver 8.8.8.8\n"), 0644)
+		_ = os.WriteFile("/etc/resolv.conf", []byte("nameserver 1.1.1.1\nnameserver 8.8.8.8\n"), 0644)
 	}
 }
 
@@ -44,8 +44,8 @@ func bootParam(key string) string {
 		return ""
 	}
 	for _, param := range strings.Split(string(data), " ") {
-		if strings.HasPrefix(param, key+"=") {
-			return strings.TrimPrefix(param, key+"=")
+		if val, ok := strings.CutPrefix(param, key+"="); ok {
+			return val
 		}
 	}
 	return ""

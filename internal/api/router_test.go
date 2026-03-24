@@ -27,7 +27,7 @@ func setupTestStore(t *testing.T) *store.Store {
 		Name:      "test",
 		CreatedAt: time.Now().UTC(),
 	}
-	if err := s.CreateAPIKey(context.Background(), ak); err != nil {
+	if err := s.CreateAPIKey(t.Context(), ak); err != nil {
 		t.Fatal(err)
 	}
 	return s
