@@ -56,10 +56,17 @@ deploy-service:
 	scp deploy/setup-bridge.sh $(REMOTE_HOST):$(REMOTE_DIR)/
 	ssh $(REMOTE_HOST) 'chmod +x $(REMOTE_DIR)/setup-bridge.sh && $(REMOTE_DIR)/setup-bridge.sh && systemctl daemon-reload && systemctl enable pyro'
 
-# Rebuild rootfs with latest agent and inject into host
+# Inject latest agent into all rootfs images on host
 deploy-rootfs: build-linux
 	scp bin/linux/pyro-agent $(REMOTE_HOST):/tmp/pyro-agent-new
-	ssh $(REMOTE_HOST) 'MNTDIR=$$(mktemp -d) && mount -o loop $(REMOTE_DIR)/images/default/rootfs.ext4 $$MNTDIR && cp /tmp/pyro-agent-new $$MNTDIR/usr/bin/pyro-agent && chmod 755 $$MNTDIR/usr/bin/pyro-agent && umount $$MNTDIR && rmdir $$MNTDIR && rm /tmp/pyro-agent-new && echo "rootfs updated"'
+	ssh $(REMOTE_HOST) 'for img in $$(ls -d $(REMOTE_DIR)/images/*/rootfs.ext4 2>/dev/null); do \
+		MNTDIR=$$(mktemp -d) && \
+		mount -o loop $$img $$MNTDIR && \
+		cp /tmp/pyro-agent-new $$MNTDIR/usr/bin/pyro-agent && \
+		chmod 755 $$MNTDIR/usr/bin/pyro-agent && \
+		umount $$MNTDIR && rmdir $$MNTDIR && \
+		echo "updated: $$img"; \
+	done && rm /tmp/pyro-agent-new'
 
 # Run integration tests on remote KVM host
 test-integration: build-linux

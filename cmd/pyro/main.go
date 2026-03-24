@@ -170,12 +170,37 @@ func sandboxList() {
 	}
 }
 
+// resolveID expands a short ID prefix to a full sandbox ID.
+func resolveID(prefix string) string {
+	data, status := apiRequest("GET", "/sandboxes", nil)
+	if status != 200 {
+		return prefix // fallback to raw input
+	}
+	var sandboxes []map[string]any
+	json.Unmarshal(data, &sandboxes)
+	var matches []string
+	for _, sb := range sandboxes {
+		id := sb["id"].(string)
+		if strings.HasPrefix(id, prefix) {
+			matches = append(matches, id)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0]
+	}
+	if len(matches) > 1 {
+		fmt.Fprintf(os.Stderr, "error: ambiguous ID prefix %q matches %d sandboxes\n", prefix, len(matches))
+		os.Exit(1)
+	}
+	return prefix // no match — let the API return 404
+}
+
 func sandboxExec() {
 	if len(os.Args) < 5 {
 		fmt.Fprintln(os.Stderr, "usage: pyro sandbox exec <id> <command> [args...]")
 		os.Exit(1)
 	}
-	id := os.Args[3]
+	id := resolveID(os.Args[3])
 	cmd := os.Args[4:]
 
 	data, status := apiRequest("POST", "/sandboxes/"+id+"/exec", map[string]any{
@@ -207,7 +232,7 @@ func sandboxKill() {
 		fmt.Fprintln(os.Stderr, "usage: pyro sandbox kill <id>")
 		os.Exit(1)
 	}
-	id := os.Args[3]
+	id := resolveID(os.Args[3])
 	_, status := apiRequest("DELETE", "/sandboxes/"+id, nil)
 	if status != 204 {
 		fmt.Fprintf(os.Stderr, "error: %d\n", status)
