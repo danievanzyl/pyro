@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.png" alt="Pyro — Firecracker microVM sandboxes for AI agents" width="900" />
+  <img src="assets/banner.svg" alt="Pyro — Firecracker microVM sandboxes for AI agents" width="900" />
 </p>
 
 <p align="center">
