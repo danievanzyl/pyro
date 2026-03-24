@@ -1,10 +1,13 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="Pyro" width="200" />
+  <img src="assets/banner.svg" alt="Pyro — Firecracker microVM sandboxes for AI agents" width="900" />
 </p>
 
 <p align="center">
-  Open-source Firecracker microVM sandbox platform for AI agents.<br>
-  Spin up isolated Linux VMs in milliseconds via API, run code, and tear them down.
+  <a href="https://github.com/danievanzyl/pyro/actions"><img src="https://github.com/danievanzyl/pyro/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://goreportcard.com/report/github.com/danievanzyl/pyro"><img src="https://goreportcard.com/badge/github.com/danievanzyl/pyro" alt="Go Report"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
+  <a href="https://pypi.org/project/pyro-sdk/"><img src="https://img.shields.io/pypi/v/pyro-sdk?label=pyro-sdk" alt="PyPI"></a>
+  <a href="https://www.npmjs.com/package/@pyrovm/sdk"><img src="https://img.shields.io/npm/v/@pyrovm/sdk?label=@pyrovm/sdk" alt="npm"></a>
 </p>
 
 ## Features

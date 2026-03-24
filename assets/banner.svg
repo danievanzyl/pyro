@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="300" viewBox="0 0 900 300" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="900" y2="300" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0f0f0f"/>
+      <stop offset="100%" stop-color="#1a1a2e"/>
+    </linearGradient>
+    <linearGradient id="fire" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FF6B35"/>
+      <stop offset="100%" stop-color="#F7C948"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FF6B35" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#FF6B35" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="300" fill="url(#bg)"/>
+
+  <!-- Subtle grid -->
+  <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+    <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#ffffff" stroke-opacity="0.03" stroke-width="1"/>
+  </pattern>
+  <rect width="900" height="300" fill="url(#grid)"/>
+
+  <!-- Glow behind icon -->
+  <circle cx="350" cy="130" r="80" fill="url(#glow)"/>
+
+  <!-- Fire icon (larger) -->
+  <g transform="translate(315, 80) scale(1.8)">
+    <path d="M16 4C16 4 20.5 10.5 20.5 16.5C20.5 19.5 22 22 24 23.5C22.5 20 24 16 27 13C27 13 28 20 28 23C28 30.18 22.18 36 15 36C7.82 36 2 30.18 2 23C2 17 6 11.5 10 8C10 8 12 14 14 15C14 11 14.5 6.5 16 4Z" fill="url(#fire)"/>
+  </g>
+
+  <!-- Title -->
+  <text x="400" y="140" font-family="'Space Grotesk', 'SF Pro Display', system-ui, sans-serif" font-weight="700" font-size="64" fill="#ffffff" text-anchor="start">Pyro</text>
+
+  <!-- Tagline -->
+  <text x="400" y="175" font-family="'Inter', 'SF Pro Text', system-ui, sans-serif" font-weight="400" font-size="18" fill="#a0a0a0" text-anchor="start">Firecracker microVM sandboxes for AI agents</text>
+
+  <!-- Feature pills -->
+  <g transform="translate(400, 200)">
+    <rect x="0" y="0" width="100" height="28" rx="14" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.12" stroke-width="1"/>
+    <text x="50" y="18" font-family="'SF Mono', 'IBM Plex Mono', monospace" font-size="11" fill="#c0c0c0" text-anchor="middle">Sub-second</text>
+
+    <rect x="112" y="0" width="85" height="28" rx="14" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.12" stroke-width="1"/>
+    <text x="154.5" y="18" font-family="'SF Mono', 'IBM Plex Mono', monospace" font-size="11" fill="#c0c0c0" text-anchor="middle">Isolated</text>
+
+    <rect x="209" y="0" width="105" height="28" rx="14" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.12" stroke-width="1"/>
+    <text x="261.5" y="18" font-family="'SF Mono', 'IBM Plex Mono', monospace" font-size="11" fill="#c0c0c0" text-anchor="middle">REST + WS</text>
+
+    <rect x="326" y="0" width="120" height="28" rx="14" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.12" stroke-width="1"/>
+    <text x="386" y="18" font-family="'SF Mono', 'IBM Plex Mono', monospace" font-size="11" fill="#c0c0c0" text-anchor="middle">Python + TS</text>
+  </g>
+
+  <!-- Terminal preview -->
+  <g transform="translate(400, 245)">
+    <text font-family="'SF Mono', 'IBM Plex Mono', monospace" font-size="13" fill="#4ae176">
+      <tspan x="0" dy="0">$</tspan>
+      <tspan fill="#808080"> pyro sandbox create --image python</tspan>
+    </text>
+  </g>
+
+  <!-- Bottom accent line -->
+  <rect x="0" y="296" width="900" height="4" fill="url(#fire)"/>
+</svg>
