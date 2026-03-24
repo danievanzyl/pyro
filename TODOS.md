@@ -16,7 +16,7 @@
 - [x] Dashboard page uses EventSource with polling fallback
 - [x] Health tick every 5s over SSE (active count)
 - [x] Keep WebSocket for exec streaming only (`GET /sandboxes/{id}/ws`)
-- [ ] Add EventSource to sandboxes + audit pages (currently dashboard only)
+- [x] Add EventSource to sandboxes + audit pages (currently dashboard only)
 
 ## Testing on Homelab
 

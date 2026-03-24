@@ -3,10 +3,12 @@
 package main
 
 import (
+	"encoding/binary"
+	"net"
 	"os"
-	"os/exec"
 	"strings"
 	"syscall"
+	"unsafe"
 )
 
 func initAsInit() {
@@ -22,17 +24,16 @@ func initAsInit() {
 	os.Setenv("HOME", "/root")
 	os.Setenv("TERM", "linux")
 
-	exec.Command("ip", "link", "set", "lo", "up").Run()
+	setLinkUp("lo")
 
 	// Configure eth0 from kernel boot params (pyro.ip= pyro.gw=).
-	ip, gw := bootParam("pyro.ip"), bootParam("pyro.gw")
-	if ip != "" {
-		exec.Command("ip", "addr", "add", ip+"/24", "dev", "eth0").Run()
-		exec.Command("ip", "link", "set", "eth0", "up").Run()
+	ipStr, gw := bootParam("pyro.ip"), bootParam("pyro.gw")
+	if ipStr != "" {
+		addAddr("eth0", ipStr, 24)
+		setLinkUp("eth0")
 		if gw != "" {
-			exec.Command("ip", "route", "add", "default", "via", gw).Run()
+			addDefaultRoute(gw)
 		}
-		// DNS
 		os.MkdirAll("/etc", 0755)
 		_ = os.WriteFile("/etc/resolv.conf", []byte("nameserver 1.1.1.1\nnameserver 8.8.8.8\n"), 0644)
 	}
@@ -49,4 +50,158 @@ func bootParam(key string) string {
 		}
 	}
 	return ""
+}
+
+// --- Netlink helpers (no external dependencies) ---
+
+// setLinkUp brings a network interface up using ioctl SIOCSIFFLAGS.
+func setLinkUp(name string) {
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, 0)
+	if err != nil {
+		return
+	}
+	defer syscall.Close(fd)
+
+	var ifr [40]byte // struct ifreq
+	copy(ifr[:syscall.IFNAMSIZ], name)
+
+	// Get current flags.
+	syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), syscall.SIOCGIFFLAGS, uintptr(unsafe.Pointer(&ifr[0])))
+
+	// Set IFF_UP.
+	flags := binary.LittleEndian.Uint16(ifr[16:18])
+	flags |= syscall.IFF_UP | syscall.IFF_RUNNING
+	binary.LittleEndian.PutUint16(ifr[16:18], flags)
+
+	syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), syscall.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifr[0])))
+}
+
+// addAddr adds an IPv4 address to an interface using netlink RTM_NEWADDR.
+func addAddr(name, ipStr string, prefixLen int) {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return
+	}
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return
+	}
+
+	ifindex := ifIndex(name)
+	if ifindex == 0 {
+		return
+	}
+
+	fd, err := syscall.Socket(syscall.AF_NETLINK, syscall.SOCK_RAW, syscall.NETLINK_ROUTE)
+	if err != nil {
+		return
+	}
+	defer syscall.Close(fd)
+
+	// RTM_NEWADDR message.
+	msg := make([]byte, 0, 128)
+
+	// nlmsghdr (16 bytes)
+	msg = appendU32(msg, 0) // length (fill later)
+	msg = appendU16(msg, syscall.RTM_NEWADDR)
+	msg = appendU16(msg, syscall.NLM_F_REQUEST|syscall.NLM_F_ACK|syscall.NLM_F_CREATE|syscall.NLM_F_EXCL)
+	msg = appendU32(msg, 1) // seq
+	msg = appendU32(msg, 0) // pid
+
+	// ifaddrmsg (8 bytes)
+	msg = append(msg, syscall.AF_INET)     // family
+	msg = append(msg, byte(prefixLen))     // prefixlen
+	msg = append(msg, 0)                   // flags
+	msg = append(msg, 0)                   // scope (RT_SCOPE_UNIVERSE)
+	msg = appendU32(msg, uint32(ifindex))  // index
+
+	// IFA_LOCAL attr
+	msg = appendAttr(msg, 2 /* IFA_LOCAL */, ip4)
+	// IFA_ADDRESS attr
+	msg = appendAttr(msg, 1 /* IFA_ADDRESS */, ip4)
+
+	// Fill length.
+	binary.LittleEndian.PutUint32(msg[0:4], uint32(len(msg)))
+
+	syscall.Write(fd, msg)
+	// Read ACK (ignore errors — best effort).
+	ack := make([]byte, 128)
+	syscall.Read(fd, ack)
+}
+
+// addDefaultRoute adds a default route via gateway using netlink RTM_NEWROUTE.
+func addDefaultRoute(gwStr string) {
+	gw := net.ParseIP(gwStr)
+	if gw == nil {
+		return
+	}
+	gw4 := gw.To4()
+	if gw4 == nil {
+		return
+	}
+
+	fd, err := syscall.Socket(syscall.AF_NETLINK, syscall.SOCK_RAW, syscall.NETLINK_ROUTE)
+	if err != nil {
+		return
+	}
+	defer syscall.Close(fd)
+
+	msg := make([]byte, 0, 128)
+
+	// nlmsghdr
+	msg = appendU32(msg, 0) // length
+	msg = appendU16(msg, syscall.RTM_NEWROUTE)
+	msg = appendU16(msg, syscall.NLM_F_REQUEST|syscall.NLM_F_ACK|syscall.NLM_F_CREATE|syscall.NLM_F_EXCL)
+	msg = appendU32(msg, 2) // seq
+	msg = appendU32(msg, 0) // pid
+
+	// rtmsg (12 bytes)
+	msg = append(msg, syscall.AF_INET) // family
+	msg = append(msg, 0)               // dst_len (0 = default route)
+	msg = append(msg, 0)               // src_len
+	msg = append(msg, 0)               // tos
+	msg = append(msg, syscall.RT_TABLE_MAIN)
+	msg = append(msg, syscall.RTPROT_BOOT)
+	msg = append(msg, syscall.RT_SCOPE_UNIVERSE)
+	msg = append(msg, syscall.RTN_UNICAST)
+	msg = appendU32(msg, 0) // flags
+
+	// RTA_GATEWAY attr
+	msg = appendAttr(msg, syscall.RTA_GATEWAY, gw4)
+
+	binary.LittleEndian.PutUint32(msg[0:4], uint32(len(msg)))
+
+	syscall.Write(fd, msg)
+	ack := make([]byte, 128)
+	syscall.Read(fd, ack)
+}
+
+// ifIndex returns the index of a network interface.
+func ifIndex(name string) int {
+	iface, err := net.InterfaceByName(name)
+	if err != nil {
+		return 0
+	}
+	return iface.Index
+}
+
+func appendU16(b []byte, v uint16) []byte {
+	return append(b, byte(v), byte(v>>8))
+}
+
+func appendU32(b []byte, v uint32) []byte {
+	return append(b, byte(v), byte(v>>8), byte(v>>16), byte(v>>24))
+}
+
+// appendAttr appends a netlink attribute (NLA header + data, padded to 4-byte alignment).
+func appendAttr(b []byte, typ uint16, data []byte) []byte {
+	attrLen := 4 + len(data) // nla_len (2) + nla_type (2) + data
+	b = appendU16(b, uint16(attrLen))
+	b = appendU16(b, typ)
+	b = append(b, data...)
+	// Pad to 4-byte alignment.
+	for len(b)%4 != 0 {
+		b = append(b, 0)
+	}
+	return b
 }

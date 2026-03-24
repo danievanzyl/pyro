@@ -1,11 +1,10 @@
 <script>
-	import { apiFetch, hasApiKey } from '$lib/auth.svelte.js';
+	import { apiFetch, hasApiKey, getApiKey } from '$lib/auth.svelte.js';
 
 	let authenticated = $state(hasApiKey());
 	let entries = $state([]);
 	let error = $state('');
 	let severityFilter = $state('ALL');
-
 	let filtered = $derived(
 		severityFilter === 'ALL' ? entries : entries.filter(e => severity(e.action) === severityFilter)
 	);
@@ -51,9 +50,28 @@
 		} catch (e) { error = e.message; }
 	}
 
+	let eventSource = null;
+	let sseRetries = 0;
+
+	function connectSSE() {
+		const key = getApiKey();
+		if (!key || sseRetries > 3) return;
+		eventSource = new EventSource(`/api/events?api_key=${encodeURIComponent(key)}`);
+		eventSource.addEventListener('sandbox.created', () => refresh());
+		eventSource.addEventListener('sandbox.destroyed', () => refresh());
+		eventSource.addEventListener('sandbox.exec', () => refresh());
+		eventSource.addEventListener('connected', () => { sseRetries = 0; });
+		eventSource.onerror = () => {
+			sseRetries++;
+			eventSource.close();
+			eventSource = null;
+		};
+	}
+
 	if (authenticated) {
 		refresh();
-		setInterval(refresh, 5000);
+		connectSSE();
+		setInterval(refresh, 15000); // Fallback polling (SSE handles real-time)
 	}
 </script>
 

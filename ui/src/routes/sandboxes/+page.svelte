@@ -1,5 +1,5 @@
 <script>
-	import { apiFetch } from '$lib/auth.svelte.js';
+	import { apiFetch, getApiKey } from '$lib/auth.svelte.js';
 
 	let sandboxes = $state([]);
 	let kernels = $state([]);
@@ -24,6 +24,24 @@
 			const res = await apiFetch('/kernels');
 			if (res.ok) kernels = await res.json();
 		} catch {}
+	}
+
+	let eventSource = null;
+	let sseRetries = 0;
+
+	function connectSSE() {
+		const key = getApiKey();
+		if (!key || sseRetries > 3) return;
+		eventSource = new EventSource(`/api/events?api_key=${encodeURIComponent(key)}`);
+		eventSource.addEventListener('sandbox.created', () => refresh());
+		eventSource.addEventListener('sandbox.destroyed', () => refresh());
+		eventSource.addEventListener('sandbox.exec', () => refresh());
+		eventSource.addEventListener('connected', () => { sseRetries = 0; });
+		eventSource.onerror = () => {
+			sseRetries++;
+			eventSource.close();
+			eventSource = null;
+		};
 	}
 
 	async function createSandbox() {
@@ -69,7 +87,8 @@
 
 	refresh();
 	fetchKernels();
-	setInterval(refresh, 3000);
+	connectSSE();
+	setInterval(refresh, 10000); // Fallback polling (SSE handles real-time)
 </script>
 
 <div class="page-header">
