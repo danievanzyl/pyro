@@ -1,6 +1,7 @@
 <script>
-	import { apiFetch } from '$lib/auth.svelte.js';
+	import { apiFetch, hasApiKey } from '$lib/auth.svelte.js';
 
+	let authenticated = $state(hasApiKey());
 	let images = $state([]);
 	let error = $state('');
 
@@ -23,7 +24,7 @@
 		} catch (e) { error = e.message; }
 	}
 
-	refresh();
+	if (authenticated) refresh();
 </script>
 
 <div class="page-header">
@@ -67,6 +68,12 @@
 				{/each}
 			</tbody>
 		</table>
+	</div>
+{:else if !authenticated}
+	<div class="empty-state card">
+		<span class="material-symbols-outlined">key</span>
+		<h3>Connect to view images</h3>
+		<p>Enter your API key on the <a href="/">Fleet</a> page</p>
 	</div>
 {:else}
 	<div class="empty-state card">

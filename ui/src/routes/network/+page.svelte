@@ -1,6 +1,7 @@
 <script>
-	import { apiFetch } from '$lib/auth.svelte.js';
+	import { apiFetch, hasApiKey } from '$lib/auth.svelte.js';
 
+	let authenticated = $state(hasApiKey());
 	let health = $state(null);
 	let sandboxes = $state([]);
 	let error = $state('');
@@ -16,8 +17,10 @@
 		} catch (e) { error = e.message; }
 	}
 
-	fetchData();
-	setInterval(fetchData, 5000);
+	if (authenticated) {
+		fetchData();
+		setInterval(fetchData, 5000);
+	}
 </script>
 
 <div class="page-header">
@@ -34,6 +37,7 @@
 	</div>
 {/if}
 
+{#if authenticated}
 <div class="net-grid">
 	<div class="card">
 		<h3>Bridge</h3>
@@ -55,6 +59,8 @@
 		</dl>
 	</div>
 </div>
+
+{/if}
 
 {#if sandboxes.length > 0}
 	<h2 style="margin: 1.5rem 0 0.75rem; font-family: var(--font-headline); font-size: 1rem; font-weight: 600;">TAP Devices</h2>
@@ -85,6 +91,12 @@
 				{/each}
 			</tbody>
 		</table>
+	</div>
+{:else if !authenticated}
+	<div class="empty-state card" style="margin-top:1.5rem;">
+		<span class="material-symbols-outlined">key</span>
+		<h3>Connect to view network</h3>
+		<p>Enter your API key on the <a href="/">Fleet</a> page</p>
 	</div>
 {:else}
 	<div class="empty-state card" style="margin-top:1.5rem;">

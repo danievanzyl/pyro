@@ -46,6 +46,7 @@ type PoolConfig struct {
 type snapshot struct {
 	ID         string
 	Image      string
+	KernelPath string // kernel used to create this snapshot
 	MemFile    string // path to memory snapshot
 	SnapFile   string // path to VM state snapshot
 	VsockCID   uint32
@@ -76,27 +77,26 @@ func NewPool(cfg PoolConfig, manager *Manager, log *slog.Logger) (*Pool, error) 
 	}, nil
 }
 
-// Claim takes a ready snapshot from the pool for the given image.
+// Claim takes a ready snapshot from the pool matching image and kernel.
 // Returns nil if none available (caller should fall back to cold boot).
-func (p *Pool) Claim(image string) *snapshot {
+func (p *Pool) Claim(image, kernelPath string) *snapshot {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	snaps := p.ready[image]
-	if len(snaps) == 0 {
-		return nil
+	for i, s := range snaps {
+		if s.KernelPath == kernelPath {
+			// Remove from pool.
+			p.ready[image] = append(snaps[:i], snaps[i+1:]...)
+			p.log.Info("snapshot claimed from pool",
+				"image", image,
+				"snap_id", s.ID,
+				"remaining", len(p.ready[image]))
+			return s
+		}
 	}
 
-	// Pop the oldest snapshot (FIFO).
-	s := snaps[0]
-	p.ready[image] = snaps[1:]
-
-	p.log.Info("snapshot claimed from pool",
-		"image", image,
-		"snap_id", s.ID,
-		"remaining", len(p.ready[image]))
-
-	return s
+	return nil
 }
 
 // Available returns the number of ready snapshots for an image.
@@ -384,12 +384,13 @@ func (p *Pool) createSnapshot(ctx context.Context, image string) (*snapshot, err
 	os.Remove(socketPath)
 
 	return &snapshot{
-		ID:        id,
-		Image:     image,
-		MemFile:   memFile,
-		SnapFile:  snapFile,
-		VsockCID:  cid,
-		CreatedAt: time.Now(),
+		ID:         id,
+		Image:      image,
+		KernelPath: p.manager.cfg.KernelPath,
+		MemFile:    memFile,
+		SnapFile:   snapFile,
+		VsockCID:   cid,
+		CreatedAt:  time.Now(),
 	}, nil
 }
 

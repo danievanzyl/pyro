@@ -1,6 +1,7 @@
 <script>
-	import { apiFetch } from '$lib/auth.svelte.js';
+	import { apiFetch, hasApiKey } from '$lib/auth.svelte.js';
 
+	let authenticated = $state(hasApiKey());
 	let entries = $state([]);
 	let error = $state('');
 	let severityFilter = $state('ALL');
@@ -50,8 +51,10 @@
 		} catch (e) { error = e.message; }
 	}
 
-	refresh();
-	setInterval(refresh, 5000);
+	if (authenticated) {
+		refresh();
+		setInterval(refresh, 5000);
+	}
 </script>
 
 <div class="page-header">
@@ -72,6 +75,13 @@
 	</div>
 {/if}
 
+{#if !authenticated}
+<div class="empty-state card">
+	<span class="material-symbols-outlined">key</span>
+	<h3>Connect to view logs</h3>
+	<p>Enter your API key on the <a href="/">Fleet</a> page</p>
+</div>
+{:else}
 <div class="controls">
 	<div class="filters">
 		{#each ['ALL', 'INFO', 'WARN', 'ERROR'] as sev}
@@ -129,6 +139,7 @@
 		</div>
 	</div>
 </div>
+{/if}
 
 <style>
 	.page-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 1.25rem; }
