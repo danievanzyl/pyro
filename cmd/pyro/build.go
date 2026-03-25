@@ -23,29 +23,27 @@ type imageSpec struct {
 var builtinImages = map[string]imageSpec{
 	"ubuntu": {
 		ociRef: "docker://ubuntu:24.04",
-		sizeMB: 1024,
+		sizeMB: 512,
 		postPkgs: []string{
 			"python3", "python3-pip", "git", "curl", "wget", "jq",
-			"build-essential", "ca-certificates", "openssh-client",
-			"net-tools", "iputils-ping", "dnsutils", "vim-tiny",
-			"less", "file", "unzip", "zip", "htop", "strace", "procps",
+			"ca-certificates", "openssh-client", "procps",
 		},
 	},
 	"python": {
 		ociRef: "docker://python:3.12-slim",
-		sizeMB: 1024,
+		sizeMB: 512,
 		postPkgs: []string{
-			"git", "curl", "wget", "ca-certificates", "build-essential", "procps",
+			"git", "curl", "wget", "ca-certificates", "procps",
 		},
 		postCmds: [][]string{
-			{"pip", "install", "--no-cache-dir", "numpy", "requests", "httpx", "pydantic", "rich"},
+			{"pip", "install", "--no-cache-dir", "requests", "httpx"},
 		},
 	},
 	"node": {
 		ociRef: "docker://node:22-slim",
-		sizeMB: 1024,
+		sizeMB: 512,
 		postPkgs: []string{
-			"git", "curl", "wget", "ca-certificates", "build-essential", "procps",
+			"git", "curl", "wget", "ca-certificates", "procps",
 		},
 		postCmds: [][]string{
 			{"corepack", "enable"},

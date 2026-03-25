@@ -131,9 +131,9 @@ make deploy         # build + SCP to remote host
 |-------|------|----------|
 | `minimal` | 50 MB | Alpine base, busybox |
 | `default` | 50 MB | Alpine + common tools |
-| `ubuntu` | 1 GB | Ubuntu 22.04 |
-| `python` | 1 GB | Ubuntu + Python 3.12 + pip |
-| `node` | 1 GB | Ubuntu + Node.js 22 + npm |
+| `ubuntu` | ~512 MB | Ubuntu 24.04 + git, curl, python3 |
+| `python` | ~512 MB | Python 3.12 + pip, requests, httpx |
+| `node` | ~512 MB | Node.js 22 + npm, corepack |
 
 Build custom images from Dockerfiles:
 
