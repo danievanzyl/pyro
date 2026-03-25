@@ -6,14 +6,71 @@
 	let error = $state('');
 	let apiKeyInput = $state('');
 	let authenticated = $state(hasApiKey());
+	let authError = $state('');
+	let validating = $state(false);
+	let apiKeys = $state([]);
+	let newKeyValue = $state('');
 
-	function saveKey() {
-		if (apiKeyInput.trim()) {
-			setApiKey(apiKeyInput.trim());
+	async function saveKey() {
+		const key = apiKeyInput.trim();
+		if (!key) return;
+		validating = true;
+		authError = '';
+		try {
+			const res = await fetch('/api/sandboxes', {
+				headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' }
+			});
+			if (res.status === 401) {
+				authError = 'Invalid API key';
+				validating = false;
+				return;
+			}
+			setApiKey(key);
 			authenticated = true;
 			fetchData();
 			connectSSE();
+		} catch (e) {
+			authError = 'Connection failed: ' + e.message;
 		}
+		validating = false;
+	}
+
+	function disconnect() {
+		setApiKey('');
+		authenticated = false;
+		sandboxes = [];
+		health = null;
+		apiKeys = [];
+		if (eventSource) { eventSource.close(); eventSource = null; }
+	}
+
+	async function fetchKeys() {
+		try {
+			const res = await apiFetch('/keys');
+			if (res.ok) apiKeys = await res.json();
+		} catch {}
+	}
+
+	async function createNewKey() {
+		const name = prompt('Key name:');
+		if (!name) return;
+		try {
+			const res = await apiFetch('/keys', {
+				method: 'POST',
+				body: JSON.stringify({ name }),
+			});
+			if (res.ok) {
+				const data = await res.json();
+				newKeyValue = data.key;
+				fetchKeys();
+			}
+		} catch {}
+	}
+
+	async function revokeKey(id) {
+		if (!confirm('Revoke this API key? This cannot be undone.')) return;
+		await apiFetch(`/keys/${id}`, { method: 'DELETE' });
+		fetchKeys();
 	}
 
 	async function fetchData() {
@@ -75,6 +132,7 @@
 	}
 
 	fetchData();
+	fetchKeys();
 	connectSSE();
 	setInterval(fetchData, 5000);
 </script>
@@ -91,9 +149,15 @@
 		<span class="material-symbols-outlined" style="font-size:2rem; opacity:0.3;">key</span>
 		<h3>Connect to your cluster</h3>
 		<p>Enter your API key to monitor sandboxes</p>
+		{#if authError}
+			<div class="auth-error">{authError}</div>
+		{/if}
 		<div class="key-row">
-			<input type="password" bind:value={apiKeyInput} placeholder="pk_..." />
-			<button class="btn-primary" onclick={saveKey}>Connect</button>
+			<input type="password" bind:value={apiKeyInput} placeholder="pk_..."
+				onkeydown={(e) => e.key === 'Enter' && saveKey()} />
+			<button class="btn-primary" onclick={saveKey} disabled={validating}>
+				{validating ? 'Validating...' : 'Connect'}
+			</button>
 		</div>
 	</div>
 {:else}
@@ -102,12 +166,17 @@
 			<h1>Fleet Overview</h1>
 			<p class="subtitle">Firecracker microVM fleet status</p>
 		</div>
-		{#if health?.status === 'ok'}
-			<div class="live-indicator">
-				<span class="status-dot running pulse"></span>
-				Live
-			</div>
-		{/if}
+		<div style="display:flex; align-items:center; gap:0.75rem;">
+			{#if health?.status === 'ok'}
+				<div class="live-indicator">
+					<span class="status-dot running pulse"></span>
+					Live
+				</div>
+			{/if}
+			<button class="btn-secondary" style="font-size:0.7rem; padding:0.25rem 0.5rem;" onclick={disconnect}>
+				Disconnect
+			</button>
+		</div>
 	</div>
 
 	<div class="metrics-strip">
@@ -192,6 +261,54 @@
 			</a>
 		</div>
 	{/if}
+
+	<div class="section-header" style="margin-top:2rem;">
+		<h2>API Keys</h2>
+		<button class="btn-secondary" onclick={createNewKey}>
+			<span class="material-symbols-outlined" style="font-size:1rem;">add</span>
+			New Key
+		</button>
+	</div>
+
+	{#if newKeyValue}
+		<div class="new-key-banner card">
+			<span class="material-symbols-outlined" style="color:var(--primary);">key</span>
+			<div>
+				<strong>New API key created</strong>
+				<p style="font-size:0.75rem; color:var(--on-surface-variant);">Copy this key now — it won't be shown again.</p>
+			</div>
+			<code class="mono" style="font-size:0.8rem; background:var(--surface-container); padding:0.3rem 0.6rem; border-radius:var(--radius-sm); user-select:all;">{newKeyValue}</code>
+			<button class="btn-icon" title="Dismiss" onclick={() => newKeyValue = ''}>
+				<span class="material-symbols-outlined" style="font-size:1rem;">close</span>
+			</button>
+		</div>
+	{/if}
+
+	{#if apiKeys.length > 0}
+		<div class="card" style="padding:0; overflow:hidden;">
+			<table>
+				<thead>
+					<tr><th>Name</th><th>Key</th><th>Created</th><th></th></tr>
+				</thead>
+				<tbody>
+					{#each apiKeys as k}
+						<tr>
+							<td>{k.name}</td>
+							<td class="mono">{k.prefix}</td>
+							<td>{new Date(k.created_at).toLocaleDateString()}</td>
+							<td>
+								<button class="btn-icon" style="color:var(--error); border-color:var(--error);" title="Revoke" onclick={() => revokeKey(k.id)}>
+									<span class="material-symbols-outlined" style="font-size:1rem;">delete</span>
+								</button>
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+	{:else}
+		<p style="color:var(--on-surface-variant); font-size:0.8rem;">No API keys found.</p>
+	{/if}
 {/if}
 
 <style>
@@ -221,4 +338,6 @@
 	.key-card p { color: var(--on-surface-variant); font-size: 0.8rem; }
 	.key-row { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
 	.key-row input { width: 260px; }
+	.auth-error { color: var(--error); font-size: 0.8rem; font-weight: 500; }
+	.new-key-banner { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; padding: 0.75rem 1rem; }
 </style>

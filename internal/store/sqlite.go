@@ -211,6 +211,39 @@ func (s *Store) ValidateAPIKey(ctx context.Context, key string) (*APIKey, error)
 	return ak, nil
 }
 
+// ListAPIKeys returns all non-expired API keys (key field is masked).
+func (s *Store) ListAPIKeys(ctx context.Context) ([]*APIKey, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, key, name, created_at, expires_at FROM api_keys ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var keys []*APIKey
+	for rows.Next() {
+		ak := &APIKey{}
+		var expiresAt sql.NullTime
+		if err := rows.Scan(&ak.ID, &ak.Key, &ak.Name, &ak.CreatedAt, &expiresAt); err != nil {
+			return nil, err
+		}
+		if expiresAt.Valid {
+			ak.ExpiresAt = expiresAt.Time
+			if time.Now().After(ak.ExpiresAt) {
+				continue // skip expired
+			}
+		}
+		keys = append(keys, ak)
+	}
+	return keys, rows.Err()
+}
+
+// DeleteAPIKey removes an API key by ID.
+func (s *Store) DeleteAPIKey(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM api_keys WHERE id = ?`, id)
+	return err
+}
+
 // CreateAPIKey inserts a new API key.
 func (s *Store) CreateAPIKey(ctx context.Context, ak *APIKey) error {
 	var expiresAt *time.Time

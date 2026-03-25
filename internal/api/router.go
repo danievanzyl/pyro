@@ -119,13 +119,14 @@ func (s *Server) setupRoutes() {
 			r.Get("/sandboxes/{id}/files/*", s.handleFileRead)
 		})
 
-		// Authenticated image + audit routes.
+		// Authenticated image + audit + key routes.
 		r.Group(func(r chi.Router) {
 			r.Use(AuthMiddleware(s.store))
 			if s.imageMgr != nil {
 				SetupImageRoutes(r, s.imageMgr)
 			}
 			SetupAuditRoutes(r, s.store)
+			SetupKeyRoutes(r, s.store)
 		})
 
 		// WebSocket routes (auth via query param, not middleware).
