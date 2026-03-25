@@ -146,9 +146,10 @@ var ErrAtCapacity = errors.New("at capacity")
 
 // VMResources holds configurable VM resources.
 type VMResources struct {
-	VCPU       int    // 0 = use default
-	MemMiB     int    // 0 = use default
-	KernelPath string // empty = use server default
+	VCPU           int    // 0 = use default
+	MemMiB         int    // 0 = use default
+	KernelPath     string // empty = use server default
+	ScratchSizeMiB int    // 0 = no scratch disk, >0 = ephemeral /dev/vdb
 }
 
 // CreateSandbox provisions a new Firecracker microVM.
@@ -243,6 +244,19 @@ func (m *Manager) CreateSandbox(ctx context.Context, apiKeyID, image string, ttl
 		memMiB = m.cfg.MaxMemMiB
 	}
 
+	// Create ephemeral scratch disk if requested.
+	scratchPath := ""
+	if res.ScratchSizeMiB > 0 {
+		scratchPath = filepath.Join(stateDir, "scratch.ext4")
+		if err := createScratchDisk(scratchPath, res.ScratchSizeMiB); err != nil {
+			m.cleanupNetworking(tapDevice)
+			m.store.UpdateSandboxState(ctx, id, store.StateDestroyed)
+			os.RemoveAll(stateDir)
+			return nil, fmt.Errorf("create scratch disk: %w", err)
+		}
+		m.log.Info("create: scratch disk created", "id", id[:8], "size_mib", res.ScratchSizeMiB)
+	}
+
 	// Spawn Firecracker.
 	spawnStart := time.Now()
 	vmCtx, vmCancel := context.WithCancel(context.Background())
@@ -250,7 +264,7 @@ func (m *Manager) CreateSandbox(ctx context.Context, apiKeyID, image string, ttl
 	if kernelPath == "" {
 		kernelPath = m.cfg.KernelPath
 	}
-	cmd, err := m.spawnFirecracker(vmCtx, sb, rootfsPath, kernelPath, vcpu, memMiB)
+	cmd, err := m.spawnFirecracker(vmCtx, sb, rootfsPath, kernelPath, scratchPath, vcpu, memMiB)
 	if err != nil {
 		vmCancel()
 		m.cleanupNetworking(tapDevice)
@@ -480,20 +494,44 @@ func (m *Manager) Shutdown(ctx context.Context) {
 }
 
 // spawnFirecracker starts a Firecracker process.
-func (m *Manager) spawnFirecracker(ctx context.Context, sb *store.Sandbox, rootfsPath, kernelPath string, vcpu, memMiB int) (*exec.Cmd, error) {
+func (m *Manager) spawnFirecracker(ctx context.Context, sb *store.Sandbox, rootfsPath, kernelPath, scratchPath string, vcpu, memMiB int) (*exec.Cmd, error) {
 	// Build the Firecracker config JSON and write to state dir.
 	configPath := filepath.Join(sb.StateDir, "vm-config.json")
-	config := fmt.Sprintf(`{
-  "boot-source": {
-    "kernel_image_path": %q,
-    "boot_args": "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/usr/bin/pyro-agent pyro.ip=172.16.0.%d pyro.gw=172.16.0.1"
-  },
-  "drives": [{
+
+	bootArgs := fmt.Sprintf(
+		"console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/usr/bin/pyro-agent pyro.ip=172.16.0.%d pyro.gw=172.16.0.1",
+		sb.VsockCID)
+	if scratchPath != "" {
+		bootArgs += " pyro.scratch=1"
+	}
+
+	drives := fmt.Sprintf(`[{
     "drive_id": "rootfs",
     "path_on_host": %q,
     "is_root_device": true,
     "is_read_only": false
-  }],
+  }]`, rootfsPath)
+
+	if scratchPath != "" {
+		drives = fmt.Sprintf(`[{
+    "drive_id": "rootfs",
+    "path_on_host": %q,
+    "is_root_device": true,
+    "is_read_only": false
+  }, {
+    "drive_id": "scratch",
+    "path_on_host": %q,
+    "is_root_device": false,
+    "is_read_only": false
+  }]`, rootfsPath, scratchPath)
+	}
+
+	config := fmt.Sprintf(`{
+  "boot-source": {
+    "kernel_image_path": %q,
+    "boot_args": %q
+  },
+  "drives": %s,
   "machine-config": {
     "vcpu_count": %d,
     "mem_size_mib": %d
@@ -507,7 +545,7 @@ func (m *Manager) spawnFirecracker(ctx context.Context, sb *store.Sandbox, rootf
     "guest_cid": %d,
     "uds_path": %q
   }
-}`, kernelPath, sb.VsockCID, rootfsPath, vcpu, memMiB, sb.VsockCID&0xFF, sb.TapDevice, sb.VsockCID,
+}`, kernelPath, bootArgs, drives, vcpu, memMiB, sb.VsockCID&0xFF, sb.TapDevice, sb.VsockCID,
 		filepath.Join(sb.StateDir, "vsock.sock"))
 
 	if err := os.WriteFile(configPath, []byte(config), 0640); err != nil {
@@ -745,4 +783,26 @@ func copyFile(src, dst string) error {
 	defer out.Close()
 	_, err = io.Copy(out, in)
 	return err
+}
+
+// createScratchDisk creates a sparse ext4 file for ephemeral scratch storage.
+func createScratchDisk(path string, sizeMiB int) error {
+	// Create sparse file (instant, allocates no disk until written).
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create scratch file: %w", err)
+	}
+	if err := f.Truncate(int64(sizeMiB) << 20); err != nil {
+		f.Close()
+		os.Remove(path)
+		return fmt.Errorf("truncate scratch: %w", err)
+	}
+	f.Close()
+
+	// Format as ext4.
+	if err := runCmd("mkfs.ext4", "-q", "-F", "-m", "0", path); err != nil {
+		os.Remove(path)
+		return fmt.Errorf("mkfs scratch: %w", err)
+	}
+	return nil
 }
