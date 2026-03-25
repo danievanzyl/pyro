@@ -69,7 +69,8 @@ func setupScratch() {
 		os.MkdirAll("/scratch/.overlay/"+dir+"/upper", 0755)
 		os.MkdirAll("/scratch/.overlay/"+dir+"/work", 0755)
 	}
-	os.MkdirAll("/scratch/tmp", 01777)
+	os.MkdirAll("/scratch/tmp", 0777)
+	os.Chmod("/scratch/tmp", 0777|os.ModeSticky) // 1777 sticky bit
 	os.MkdirAll("/scratch/home", 0750)
 
 	// Mount overlayfs on /usr, /var, /etc.
