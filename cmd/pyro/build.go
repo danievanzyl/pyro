@@ -185,11 +185,11 @@ func buildFromOCI(name, ociRef string, sizeMB int, postPkgs []string, postCmds [
 	writeFile(filepath.Join(bundleRootfs, "etc/hosts"), "127.0.0.1 localhost firecracker\n")
 	writeFile(filepath.Join(bundleRootfs, "etc/resolv.conf"), "nameserver 8.8.8.8\nnameserver 8.8.4.4\n")
 
-	// 6. Calculate actual rootfs size after all modifications
+	// 6. Calculate actual rootfs size after all modifications.
+	// Use content size + 30% headroom + 64MB, capped to sizeMB as maximum.
 	actualSizeMB := dirSizeMB(bundleRootfs)
-	// Add 30% headroom for runtime writes, min 64MB
 	neededMB := int(float64(actualSizeMB)*1.3) + 64
-	if neededMB > sizeMB {
+	if neededMB < sizeMB {
 		sizeMB = neededMB
 	}
 	fmt.Printf("==> Creating %dMB ext4 rootfs (content: %dMB)\n", sizeMB, actualSizeMB)
