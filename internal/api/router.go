@@ -167,11 +167,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // CreateSandboxRequest is the request body for POST /sandboxes.
 type CreateSandboxRequest struct {
-	TTL    int    `json:"ttl"`              // seconds
-	Image  string `json:"image"`            // rootfs image name (default: "default")
-	Kernel string `json:"kernel,omitempty"` // kernel version (default: latest)
-	VCPU   int    `json:"vcpu,omitempty"`   // vCPU count (0 = image/server default)
-	MemMiB int    `json:"mem_mib,omitempty"` // memory in MiB (0 = image/server default)
+	TTL            int    `json:"ttl"`                        // seconds
+	Image          string `json:"image"`                      // rootfs image name (default: "default")
+	Kernel         string `json:"kernel,omitempty"`            // kernel version (default: latest)
+	VCPU           int    `json:"vcpu,omitempty"`              // vCPU count (0 = image/server default)
+	MemMiB         int    `json:"mem_mib,omitempty"`           // memory in MiB (0 = image/server default)
+	ScratchSizeMiB int    `json:"scratch_size_mib,omitempty"`  // ephemeral scratch disk in MiB (0 = none)
 }
 
 func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
@@ -223,9 +224,10 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 
 	start := time.Now()
 	sb, err := s.manager.CreateSandbox(r.Context(), ak.ID, image, ttl, sandbox.VMResources{
-		VCPU:       req.VCPU,
-		KernelPath: kernelPath,
-		MemMiB: req.MemMiB,
+		VCPU:           req.VCPU,
+		KernelPath:     kernelPath,
+		MemMiB:         req.MemMiB,
+		ScratchSizeMiB: req.ScratchSizeMiB,
 	})
 	if err != nil {
 		s.log.Error("create sandbox failed", "err", err)

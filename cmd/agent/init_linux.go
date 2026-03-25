@@ -37,6 +37,53 @@ func initAsInit() {
 		os.MkdirAll("/etc", 0755)
 		_ = os.WriteFile("/etc/resolv.conf", []byte("nameserver 1.1.1.1\nnameserver 8.8.8.8\n"), 0644)
 	}
+
+	// Mount scratch disk (/dev/vdb) if present, set up overlayfs.
+	if bootParam("pyro.scratch") == "1" {
+		setupScratch()
+	}
+}
+
+// setupScratch mounts /dev/vdb at /scratch and layers overlayfs on /usr, /var, /etc
+// so that apt/pip/npm installs write to scratch while rootfs stays pristine.
+//
+//	/dev/vdb (scratch)
+//	  ├── .overlay/{usr,var,etc}/{upper,work}  — overlayfs upper dirs
+//	  ├── tmp/                                  — bind-mounted to /tmp
+//	  └── home/                                 — bind-mounted to /root
+//
+//	overlayfs mounts:
+//	  /usr = overlay(lower=/usr, upper=/scratch/.overlay/usr/upper)
+//	  /var = overlay(lower=/var, upper=/scratch/.overlay/var/upper)
+//	  /etc = overlay(lower=/etc, upper=/scratch/.overlay/etc/upper)
+func setupScratch() {
+	os.MkdirAll("/scratch", 0755)
+
+	// Mount /dev/vdb at /scratch.
+	if err := syscall.Mount("/dev/vdb", "/scratch", "ext4", 0, ""); err != nil {
+		return // no scratch disk attached
+	}
+
+	// Create overlay directories.
+	for _, dir := range []string{"usr", "var", "etc"} {
+		os.MkdirAll("/scratch/.overlay/"+dir+"/upper", 0755)
+		os.MkdirAll("/scratch/.overlay/"+dir+"/work", 0755)
+	}
+	os.MkdirAll("/scratch/tmp", 01777)
+	os.MkdirAll("/scratch/home", 0750)
+
+	// Mount overlayfs on /usr, /var, /etc.
+	for _, dir := range []string{"usr", "var", "etc"} {
+		opts := "lowerdir=/" + dir + ",upperdir=/scratch/.overlay/" + dir + "/upper,workdir=/scratch/.overlay/" + dir + "/work"
+		syscall.Mount("overlay", "/"+dir, "overlay", 0, opts)
+	}
+
+	// Bind /tmp and /root to scratch.
+	syscall.Mount("/scratch/tmp", "/tmp", "", syscall.MS_BIND, "")
+	syscall.Mount("/scratch/home", "/root", "", syscall.MS_BIND, "")
+
+	// Re-create resolv.conf in overlayed /etc (overlay may hide it).
+	_ = os.WriteFile("/etc/resolv.conf", []byte("nameserver 1.1.1.1\nnameserver 8.8.8.8\n"), 0644)
 }
 
 func bootParam(key string) string {
