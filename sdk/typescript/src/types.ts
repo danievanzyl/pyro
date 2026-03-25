@@ -25,6 +25,8 @@ export interface CreateSandboxOptions {
   timeout?: number;
   vcpu?: number;
   memMib?: number;
+  /** Ephemeral scratch disk in MiB (0 = none). Mounted at /scratch with overlayfs. */
+  scratchSizeMib?: number;
 }
 
 /** Options for executing a command. */

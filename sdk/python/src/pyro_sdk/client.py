@@ -31,6 +31,7 @@ class _SandboxNamespace:
         timeout: int = 3600,
         vcpu: int = 0,
         mem_mib: int = 0,
+        scratch_size_mib: int = 0,
     ) -> Sandbox:
         """Create a new sandbox.
 
@@ -39,6 +40,9 @@ class _SandboxNamespace:
             timeout: TTL in seconds (default 3600 = 1 hour).
             vcpu: vCPU count (0 = server default).
             mem_mib: Memory in MiB (0 = server default).
+            scratch_size_mib: Ephemeral scratch disk in MiB (0 = none).
+                Mounted at /scratch with overlayfs on /usr, /var, /etc
+                so package installs write to scratch instead of rootfs.
 
         Returns:
             A Sandbox instance ready for use.
@@ -48,6 +52,8 @@ class _SandboxNamespace:
             body["vcpu"] = vcpu
         if mem_mib > 0:
             body["mem_mib"] = mem_mib
+        if scratch_size_mib > 0:
+            body["scratch_size_mib"] = scratch_size_mib
 
         data = await self._client._request("POST", "/sandboxes", json=body)
         info = SandboxInfo.from_dict(data)

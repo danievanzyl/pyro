@@ -10,6 +10,7 @@
 	let newKernel = $state('');
 	let newVCPU = $state(1);
 	let newMemMiB = $state(256);
+	let newScratchMiB = $state(0);
 
 	async function refresh() {
 		try {
@@ -49,6 +50,7 @@
 		try {
 			const body = { ttl: newTTL, image: newImage, vcpu: newVCPU, mem_mib: newMemMiB };
 			if (newKernel) body.kernel = newKernel;
+			if (newScratchMiB > 0) body.scratch_size_mib = newScratchMiB;
 			const res = await apiFetch('/sandboxes', {
 				method: 'POST',
 				body: JSON.stringify(body),
@@ -136,6 +138,16 @@
 		<div class="field">
 			<label for="mem-input">Memory (MiB)</label>
 			<input id="mem-input" type="number" bind:value={newMemMiB} min="128" max="2048" step="128" />
+		</div>
+		<div class="field">
+			<label for="scratch-select">Scratch Disk</label>
+			<select id="scratch-select" bind:value={newScratchMiB}>
+				<option value={0}>None</option>
+				<option value={512}>512 MB</option>
+				<option value={1024}>1 GB</option>
+				<option value={2048}>2 GB</option>
+				<option value={4096}>4 GB</option>
+			</select>
 		</div>
 		<div class="field field-action">
 			<button class="btn-primary" onclick={createSandbox} disabled={creating}>

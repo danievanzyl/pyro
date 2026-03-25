@@ -22,6 +22,7 @@ class SandboxNamespace {
     };
     if (options?.vcpu && options.vcpu > 0) body.vcpu = options.vcpu;
     if (options?.memMib && options.memMib > 0) body.mem_mib = options.memMib;
+    if (options?.scratchSizeMib && options.scratchSizeMib > 0) body.scratch_size_mib = options.scratchSizeMib;
 
     const data = await this.client.request<Record<string, unknown>>(
       "POST",
