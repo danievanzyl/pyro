@@ -5,6 +5,7 @@ Requires=network.target
 
 [Service]
 Type=simple
+ExecStartPre=/opt/pyro/setup-bridge.sh
 ExecStart=/opt/pyro/bin/pyro-server \
   --listen :8080 \
   --db /opt/pyro/db/pyro.db \
