@@ -61,9 +61,12 @@ func handleGetImage(imgMgr *sandbox.ImageManager) http.HandlerFunc {
 }
 
 // CreateImageRequest is the body for POST /images.
+//
+// Exactly one of Dockerfile or Source must be set.
 type CreateImageRequest struct {
 	Name       string `json:"name"`
-	Dockerfile string `json:"dockerfile"` // path to Dockerfile on the host
+	Dockerfile string `json:"dockerfile,omitempty"` // path to Dockerfile on the host
+	Source     string `json:"source,omitempty"`     // OCI image reference, e.g. "python:3.12"
 }
 
 func handleCreateImage(imgMgr *sandbox.ImageManager) http.HandlerFunc {
@@ -81,12 +84,24 @@ func handleCreateImage(imgMgr *sandbox.ImageManager) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid image name"})
 			return
 		}
-		if req.Dockerfile == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "dockerfile path is required"})
+		hasDockerfile := req.Dockerfile != ""
+		hasSource := req.Source != ""
+		if hasDockerfile == hasSource {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "exactly one of dockerfile or source must be set",
+			})
 			return
 		}
 
-		info, err := imgMgr.CreateFromDockerfile(r.Context(), req.Name, req.Dockerfile)
+		var (
+			info *sandbox.ImageInfo
+			err  error
+		)
+		if hasSource {
+			info, err = imgMgr.CreateFromRegistry(r.Context(), req.Name, req.Source, nil)
+		} else {
+			info, err = imgMgr.CreateFromDockerfile(r.Context(), req.Name, req.Dockerfile)
+		}
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "build failed: " + err.Error()})
 			return

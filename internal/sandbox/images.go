@@ -28,6 +28,9 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/danievanzyl/pyro/internal/sandbox/imageops"
+	"github.com/danievanzyl/pyro/internal/sandbox/registry"
 )
 
 // ImageConfig configures image management.
@@ -282,6 +285,89 @@ func (im *ImageManager) tarToExt4(ctx context.Context, tarPath, ext4Path string)
 	}
 
 	return nil
+}
+
+// CreateFromRegistry pulls an OCI image from a remote registry, flattens its
+// layers onto a fresh ext4 rootfs, injects the pyro-agent, and registers it.
+// Synchronous: blocks until the image is ready or an error occurs.
+//
+// puller may be nil; in that case a default Puller is created.
+func (im *ImageManager) CreateFromRegistry(ctx context.Context, name, source string, puller *registry.Puller) (*ImageInfo, error) {
+	if puller == nil {
+		puller = registry.New()
+	}
+
+	manifest, err := puller.Resolve(ctx, source)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %s: %w", source, err)
+	}
+
+	dir := filepath.Join(im.cfg.ImagesDir, name)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return nil, fmt.Errorf("create image dir: %w", err)
+	}
+	rootfs := filepath.Join(dir, "rootfs.ext4")
+
+	im.log.Info("pulling image from registry",
+		"name", name, "source", source,
+		"digest", manifest.Digest, "layers", len(manifest.Layers))
+
+	// Estimate size: sum of layer sizes × 1.3 for ext4 overhead, with 64 MiB floor.
+	var totalBytes int64
+	for _, l := range manifest.Layers {
+		totalBytes += l.Size
+	}
+	sizeMB := int(totalBytes/(1<<20)*13/10) + 64
+
+	builder := imageops.NewExt4Builder()
+	mount, err := builder.Create(ctx, rootfs, sizeMB)
+	if err != nil {
+		os.RemoveAll(dir)
+		return nil, fmt.Errorf("create ext4: %w", err)
+	}
+
+	extractor := imageops.NewLayerExtractor()
+	for _, layer := range manifest.Layers {
+		rc, err := manifest.LayerReader(layer.Digest)
+		if err != nil {
+			mount.Close()
+			os.RemoveAll(dir)
+			return nil, fmt.Errorf("open layer %s: %w", layer.Digest, err)
+		}
+		if err := extractor.Extract(mount.MountDir, rc); err != nil {
+			rc.Close()
+			mount.Close()
+			os.RemoveAll(dir)
+			return nil, fmt.Errorf("extract layer %s: %w", layer.Digest, err)
+		}
+		rc.Close()
+	}
+
+	// Inject agent while still mounted.
+	if im.cfg.AgentBinaryPath != "" {
+		injector := imageops.NewAgentInjector(im.cfg.AgentBinaryPath)
+		if err := injector.Inject(mount.MountDir); err != nil {
+			mount.Close()
+			os.RemoveAll(dir)
+			return nil, fmt.Errorf("inject agent: %w", err)
+		}
+	}
+
+	if err := mount.Close(); err != nil {
+		os.RemoveAll(dir)
+		return nil, fmt.Errorf("unmount: %w", err)
+	}
+
+	// Copy default kernel for parity with CreateFromDockerfile.
+	defaultKernel := filepath.Join(im.cfg.ImagesDir, "default", "vmlinux")
+	kernel := filepath.Join(dir, "vmlinux")
+	if err := copyFile(defaultKernel, kernel); err != nil {
+		im.log.Warn("could not copy default kernel", "err", err)
+	}
+
+	im.log.Info("image registered from registry",
+		"name", name, "digest", manifest.Digest, "rootfs", rootfs)
+	return im.Get(name)
 }
 
 // injectAgent copies the pyro-agent binary into the rootfs at /usr/bin/pyro-agent.
