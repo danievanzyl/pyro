@@ -16,6 +16,7 @@ import (
 	"github.com/danievanzyl/pyro/internal/observability"
 	"github.com/danievanzyl/pyro/internal/protocol"
 	"github.com/danievanzyl/pyro/internal/sandbox"
+	"github.com/danievanzyl/pyro/internal/sandbox/imagestate"
 	"github.com/danievanzyl/pyro/internal/store"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -198,6 +199,23 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 	if !validName.MatchString(image) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid image name"})
 		return
+	}
+
+	// Refuse to boot against an image whose pull is still in flight or has
+	// failed — the rootfs file may be missing or partial.
+	if s.imageMgr != nil {
+		if info := s.imageMgr.Status(image); info != nil && info.Status != imagestate.StatusReady {
+			body := map[string]string{
+				"error":  "image is not ready",
+				"image":  image,
+				"status": string(info.Status),
+			}
+			if info.Error != "" {
+				body["reason"] = info.Error
+			}
+			writeJSON(w, http.StatusConflict, body)
+			return
+		}
 	}
 
 	// Resolve kernel version — empty means latest.

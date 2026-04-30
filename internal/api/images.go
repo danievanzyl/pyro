@@ -51,8 +51,10 @@ func handleGetImage(imgMgr *sandbox.ImageManager) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid image name"})
 			return
 		}
-		info, err := imgMgr.Get(name)
-		if err != nil {
+		// Status() prefers ledger over disk so in-flight and recently-failed
+		// pulls are visible.
+		info := imgMgr.Status(name)
+		if info == nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "image not found"})
 			return
 		}
@@ -93,20 +95,25 @@ func handleCreateImage(imgMgr *sandbox.ImageManager) http.HandlerFunc {
 			return
 		}
 
-		var (
-			info *sandbox.ImageInfo
-			err  error
-		)
 		if hasSource {
-			info, err = imgMgr.CreateFromRegistry(r.Context(), req.Name, req.Source, nil)
-		} else {
-			info, err = imgMgr.CreateFromDockerfile(r.Context(), req.Name, req.Dockerfile)
+			// Async: returns immediately with status=pulling. Errors here are
+			// only synchronous validation failures (Begin can't fail today,
+			// but we still propagate as 500 to be future-proof).
+			info, err := imgMgr.CreateFromRegistry(r.Context(), req.Name, req.Source, nil)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "register failed: " + err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusAccepted, info)
+			return
 		}
+
+		// Dockerfile path stays synchronous in this slice.
+		info, err := imgMgr.CreateFromDockerfile(r.Context(), req.Name, req.Dockerfile)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "build failed: " + err.Error()})
 			return
 		}
-
 		writeJSON(w, http.StatusCreated, info)
 	}
 }

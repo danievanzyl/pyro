@@ -32,8 +32,15 @@ import (
 
 	"github.com/danievanzyl/pyro/internal/sandbox/imageconfig"
 	"github.com/danievanzyl/pyro/internal/sandbox/imageops"
+	"github.com/danievanzyl/pyro/internal/sandbox/imagestate"
 	"github.com/danievanzyl/pyro/internal/sandbox/registry"
 )
+
+// imageMetaName is the on-disk metadata sidecar persisted next to
+// rootfs.ext4. Stores the resolved manifest digest + source so GET can
+// surface them after a successful pull (the ledger entry is dropped on
+// Complete; the sidecar is the source of truth for ready images).
+const imageMetaName = "image-meta.json"
 
 // ImageConfig configures image management.
 type ImageConfig struct {
@@ -47,17 +54,32 @@ type ImageConfig struct {
 
 // ImageManager handles base image lifecycle.
 type ImageManager struct {
-	cfg ImageConfig
-	log *slog.Logger
+	cfg    ImageConfig
+	log    *slog.Logger
+	ledger *imagestate.Ledger
 }
 
 // ImageInfo describes a stored base image.
+//
+// `omitzero` JSON tags keep the response payload terse for in-flight or
+// disk-only views (e.g. a pulling entry has no rootfs path; a ready disk
+// image without a meta sidecar has no digest).
 type ImageInfo struct {
-	Name      string    `json:"name"`
-	RootfsPath string   `json:"rootfs_path"`
-	KernelPath string   `json:"kernel_path"`
-	Size      int64     `json:"size"` // rootfs size in bytes
-	CreatedAt time.Time `json:"created_at"`
+	Name       string            `json:"name"`
+	Status     imagestate.Status `json:"status,omitzero"`
+	Source     string            `json:"source,omitzero"`
+	Digest     string            `json:"digest,omitzero"`
+	Error      string            `json:"error,omitzero"`
+	RootfsPath string            `json:"rootfs_path,omitzero"`
+	KernelPath string            `json:"kernel_path,omitzero"`
+	Size       int64             `json:"size,omitzero"` // rootfs size in bytes
+	CreatedAt  time.Time         `json:"created_at,omitzero"`
+}
+
+// imageMeta is the disk sidecar for a ready image.
+type imageMeta struct {
+	Digest string `json:"digest,omitzero"`
+	Source string `json:"source,omitzero"`
 }
 
 // NewImageManager creates an image manager.
@@ -65,8 +87,16 @@ func NewImageManager(cfg ImageConfig, log *slog.Logger) (*ImageManager, error) {
 	if err := os.MkdirAll(cfg.ImagesDir, 0750); err != nil {
 		return nil, fmt.Errorf("create images dir: %w", err)
 	}
-	return &ImageManager{cfg: cfg, log: log}, nil
+	return &ImageManager{
+		cfg:    cfg,
+		log:    log,
+		ledger: imagestate.New(imagestate.RealClock(), imagestate.DefaultFailedTTL),
+	}, nil
 }
+
+// Ledger exposes the in-memory pull ledger so the API layer can surface
+// in-flight and recently-failed pull state.
+func (im *ImageManager) Ledger() *imagestate.Ledger { return im.ledger }
 
 // KernelInfo describes an available guest kernel.
 type KernelInfo struct {
@@ -173,13 +203,61 @@ func (im *ImageManager) Get(name string) (*ImageInfo, error) {
 		kernel = shared
 	}
 
-	return &ImageInfo{
+	info := &ImageInfo{
 		Name:       name,
+		Status:     imagestate.StatusReady,
 		RootfsPath: rootfs,
 		KernelPath: kernel,
 		Size:       rootfsInfo.Size(),
 		CreatedAt:  rootfsInfo.ModTime(),
-	}, nil
+	}
+	// Sidecar is best-effort — pre-existing images registered before the
+	// async pull path won't have one and that's fine.
+	if meta, err := readImageMeta(filepath.Join(dir, imageMetaName)); err == nil && meta != nil {
+		info.Digest = meta.Digest
+		info.Source = meta.Source
+	}
+	return info, nil
+}
+
+// Status returns the live view of an image: ledger entry if one exists
+// (in-flight or recently-failed), otherwise the disk record. Returns nil
+// if the image is unknown to both the ledger and the disk.
+func (im *ImageManager) Status(name string) *ImageInfo {
+	if op := im.ledger.Get(name); op != nil {
+		return &ImageInfo{
+			Name:   op.Name,
+			Status: op.Status,
+			Source: op.Source,
+			Digest: op.Digest,
+			Error:  op.Error,
+		}
+	}
+	info, err := im.Get(name)
+	if err != nil {
+		return nil
+	}
+	return info
+}
+
+func readImageMeta(path string) (*imageMeta, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var m imageMeta
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+func writeImageMeta(path string, m imageMeta) error {
+	b, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, b, 0o644)
 }
 
 // CreateFromDockerfile builds a rootfs from a Dockerfile.
@@ -299,9 +377,14 @@ func (im *ImageManager) tarToExt4(ctx context.Context, tarPath, ext4Path string)
 	return nil
 }
 
-// CreateFromRegistry pulls an OCI image from a remote registry, flattens its
-// layers onto a fresh ext4 rootfs, injects the pyro-agent, and registers it.
-// Synchronous: blocks until the image is ready or an error occurs.
+// CreateFromRegistry registers an image pull from a remote OCI registry.
+// Asynchronous: returns immediately with status=pulling. The pull and
+// extraction proceed in a background goroutine that drives the ledger
+// through pulling → extracting → ready (or failed). Callers poll
+// ImageManager.Status(name) or the ledger to observe progress.
+//
+// On failure the partial image directory is removed and the ledger
+// records the error. The failed entry stays queryable for ~1h.
 //
 // puller may be nil; in that case a default Puller is created.
 func (im *ImageManager) CreateFromRegistry(ctx context.Context, name, source string, puller *registry.Puller) (*ImageInfo, error) {
@@ -309,16 +392,50 @@ func (im *ImageManager) CreateFromRegistry(ctx context.Context, name, source str
 		puller = registry.New()
 	}
 
-	manifest, err := puller.Resolve(ctx, source)
-	if err != nil {
-		return nil, fmt.Errorf("resolve %s: %w", source, err)
+	op, attached := im.ledger.Begin(name, source)
+	if attached {
+		// Slice 05 wires concurrent attach end-to-end; for now both callers
+		// see the same in-flight state.
+		return &ImageInfo{
+			Name:   op.Name,
+			Status: op.Status,
+			Source: op.Source,
+			Digest: op.Digest,
+		}, nil
 	}
 
+	// Detach from the request context — the request returns immediately
+	// but the pull must outlive it.
+	go im.runRegistryPull(context.Background(), name, source, puller)
+
+	return &ImageInfo{
+		Name:   op.Name,
+		Status: op.Status,
+		Source: op.Source,
+	}, nil
+}
+
+func (im *ImageManager) runRegistryPull(ctx context.Context, name, source string, puller *registry.Puller) {
 	dir := filepath.Join(im.cfg.ImagesDir, name)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return nil, fmt.Errorf("create image dir: %w", err)
-	}
 	rootfs := filepath.Join(dir, "rootfs.ext4")
+
+	fail := func(err error) {
+		im.log.Warn("image pull failed", "name", name, "source", source, "err", err)
+		os.RemoveAll(dir)
+		_ = im.ledger.Fail(name, err)
+	}
+
+	manifest, err := puller.Resolve(ctx, source)
+	if err != nil {
+		fail(fmt.Errorf("resolve %s: %w", source, err))
+		return
+	}
+	_ = im.ledger.SetDigest(name, manifest.Digest)
+
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		fail(fmt.Errorf("create image dir: %w", err))
+		return
+	}
 
 	im.log.Info("pulling image from registry",
 		"name", name, "source", source,
@@ -331,11 +448,16 @@ func (im *ImageManager) CreateFromRegistry(ctx context.Context, name, source str
 	}
 	sizeMB := int(totalBytes/(1<<20)*13/10) + 64
 
+	if err := im.ledger.Update(name, imagestate.StatusExtracting); err != nil {
+		fail(fmt.Errorf("ledger transition: %w", err))
+		return
+	}
+
 	builder := imageops.NewExt4Builder()
 	mount, err := builder.Create(ctx, rootfs, sizeMB)
 	if err != nil {
-		os.RemoveAll(dir)
-		return nil, fmt.Errorf("create ext4: %w", err)
+		fail(fmt.Errorf("create ext4: %w", err))
+		return
 	}
 
 	extractor := imageops.NewLayerExtractor()
@@ -343,14 +465,14 @@ func (im *ImageManager) CreateFromRegistry(ctx context.Context, name, source str
 		rc, err := manifest.LayerReader(layer.Digest)
 		if err != nil {
 			mount.Close()
-			os.RemoveAll(dir)
-			return nil, fmt.Errorf("open layer %s: %w", layer.Digest, err)
+			fail(fmt.Errorf("open layer %s: %w", layer.Digest, err))
+			return
 		}
 		if err := extractor.Extract(mount.MountDir, rc); err != nil {
 			rc.Close()
 			mount.Close()
-			os.RemoveAll(dir)
-			return nil, fmt.Errorf("extract layer %s: %w", layer.Digest, err)
+			fail(fmt.Errorf("extract layer %s: %w", layer.Digest, err))
+			return
 		}
 		rc.Close()
 	}
@@ -360,8 +482,8 @@ func (im *ImageManager) CreateFromRegistry(ctx context.Context, name, source str
 		injector := imageops.NewAgentInjector(im.cfg.AgentBinaryPath)
 		if err := injector.Inject(mount.MountDir); err != nil {
 			mount.Close()
-			os.RemoveAll(dir)
-			return nil, fmt.Errorf("inject agent: %w", err)
+			fail(fmt.Errorf("inject agent: %w", err))
+			return
 		}
 	}
 
@@ -369,13 +491,13 @@ func (im *ImageManager) CreateFromRegistry(ctx context.Context, name, source str
 	imgCfg := registry.ExtractConfig(manifest)
 	if err := imageops.WriteImageConfig(mount.MountDir, imgCfg); err != nil {
 		mount.Close()
-		os.RemoveAll(dir)
-		return nil, fmt.Errorf("write image config: %w", err)
+		fail(fmt.Errorf("write image config: %w", err))
+		return
 	}
 
 	if err := mount.Close(); err != nil {
-		os.RemoveAll(dir)
-		return nil, fmt.Errorf("unmount: %w", err)
+		fail(fmt.Errorf("unmount: %w", err))
+		return
 	}
 
 	// Copy default kernel for parity with CreateFromDockerfile.
@@ -385,9 +507,23 @@ func (im *ImageManager) CreateFromRegistry(ctx context.Context, name, source str
 		im.log.Warn("could not copy default kernel", "err", err)
 	}
 
+	// Persist source + digest sidecar so GET surfaces them once the
+	// ledger entry drops.
+	if err := writeImageMeta(filepath.Join(dir, imageMetaName), imageMeta{
+		Digest: manifest.Digest,
+		Source: source,
+	}); err != nil {
+		fail(fmt.Errorf("write image meta: %w", err))
+		return
+	}
+
+	if err := im.ledger.Complete(name); err != nil {
+		// Couldn't transition the ledger but the on-disk image is sound;
+		// keep it and surface the inconsistency in the log.
+		im.log.Warn("ledger complete failed", "name", name, "err", err)
+	}
 	im.log.Info("image registered from registry",
 		"name", name, "digest", manifest.Digest, "rootfs", rootfs)
-	return im.Get(name)
 }
 
 // dockerInspectConfig pulls Env/WorkingDir/User out of `docker inspect` for a
