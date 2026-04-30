@@ -13,21 +13,26 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/danievanzyl/pyro/internal/protocol"
+	"github.com/danievanzyl/pyro/internal/sandbox/imageconfig"
 )
 
 const (
@@ -67,6 +72,11 @@ func (w *limitedWriter) String() string {
 	return w.buf.String()
 }
 
+// imgCfg holds the image's runtime defaults (Env/WorkDir/User), loaded once
+// at startup and applied as exec defaults. Empty when /etc/pyro/image-config.json
+// is missing — preserves backward-compat for pre-existing images.
+var imgCfg *imageconfig.ImageConfig
+
 func main() {
 	// If running as PID 1 (init), mount essential filesystems first.
 	if os.Getpid() == 1 {
@@ -76,7 +86,16 @@ func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(log)
 
-	log.Info("agent starting", "version", agentVersion, "port", listenPort)
+	cfg, err := imageconfig.Load(imageconfig.Path)
+	if err != nil {
+		log.Warn("load image config", "err", err)
+		cfg = &imageconfig.ImageConfig{}
+	}
+	imgCfg = cfg
+	log.Info("agent starting",
+		"version", agentVersion, "port", listenPort,
+		"image_workdir", cfg.WorkDir, "image_user", cfg.User,
+		"image_env_count", len(cfg.Env))
 
 	listener, err := listenVsock(listenPort)
 	if err != nil {
@@ -155,14 +174,17 @@ func handleExec(conn net.Conn, msg *protocol.Envelope, log *slog.Logger) {
 	}
 
 	cmd := exec.CommandContext(ctx, req.Command[0], req.Command[1:]...)
-	if req.WorkDir != "" {
-		cmd.Dir = req.WorkDir
+	if cwd := imageconfig.ResolveCwd(imgCfg, req.WorkDir); cwd != "" {
+		cmd.Dir = cwd
 	}
-	// Always inherit base environment, overlay custom vars.
-	cmd.Env = os.Environ()
-	for k, v := range req.Env {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
+	// Inherit the agent's base environment, overlay the image's defaults, then
+	// the per-request env (request wins on key collision).
+	imageEnv := []string(nil)
+	if imgCfg != nil {
+		imageEnv = imgCfg.Env
 	}
+	cmd.Env = append(os.Environ(), imageconfig.MergeEnv(imageEnv, req.Env)...)
+	applyImageUser(cmd, imgCfg, log)
 
 	stdout := &limitedWriter{maxBytes: maxOutputBytes}
 	stderr := &limitedWriter{maxBytes: maxOutputBytes}
@@ -299,6 +321,60 @@ func handleFileRead(conn net.Conn, msg *protocol.Envelope, log *slog.Logger) {
 	if err := protocol.WriteMessage(conn, resp); err != nil {
 		log.Error("write file-read response", "err", err)
 	}
+}
+
+// applyImageUser sets cmd.SysProcAttr.Credential when the image declares a
+// USER. Numeric UIDs are applied directly. Names are resolved against
+// /etc/passwd; unknown names log a warning and fall back to running as root.
+func applyImageUser(cmd *exec.Cmd, cfg *imageconfig.ImageConfig, log *slog.Logger) {
+	if cfg == nil || cfg.User == "" {
+		return
+	}
+	uid, ok, fellBack := imageconfig.ResolveUID(cfg.User, lookupPasswdUID)
+	if fellBack {
+		log.Warn("image USER not in /etc/passwd, running as root", "user", cfg.User)
+		return
+	}
+	if !ok {
+		return
+	}
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Credential = &syscall.Credential{Uid: uint32(uid)}
+}
+
+// lookupPasswdUID parses /etc/passwd for `name`. Returns (0,false) if missing
+// or unreadable.
+func lookupPasswdUID(name string) (int, bool) {
+	f, err := os.Open("/etc/passwd")
+	if err != nil {
+		return 0, false
+	}
+	defer f.Close()
+	return parsePasswdUID(f, name)
+}
+
+// parsePasswdUID scans a passwd-formatted stream for `name` and returns the
+// uid. Extracted so tests can drive it from in-memory fixtures.
+func parsePasswdUID(r io.Reader, name string) (int, bool) {
+	sc := bufio.NewScanner(r)
+	for sc.Scan() {
+		line := sc.Text()
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Split(line, ":")
+		if len(fields) < 3 || fields[0] != name {
+			continue
+		}
+		uid, err := strconv.Atoi(fields[2])
+		if err != nil {
+			return 0, false
+		}
+		return uid, true
+	}
+	return 0, false
 }
 
 func sendError(conn net.Conn, message string) {

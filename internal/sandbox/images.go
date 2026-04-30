@@ -20,6 +20,7 @@ package sandbox
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -29,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danievanzyl/pyro/internal/sandbox/imageconfig"
 	"github.com/danievanzyl/pyro/internal/sandbox/imageops"
 	"github.com/danievanzyl/pyro/internal/sandbox/registry"
 )
@@ -241,6 +243,16 @@ func (im *ImageManager) CreateFromDockerfile(ctx context.Context, name, dockerfi
 		}
 	}
 
+	// Persist the image's runtime defaults (Env/WorkingDir/User) so the agent
+	// can apply them per exec — parity with the registry-pull path.
+	imgCfg, err := dockerInspectConfig(ctx, dockerTag)
+	if err != nil {
+		im.log.Warn("could not extract image config via docker inspect", "err", err)
+	} else if err := im.writeImageConfigToRootfs(ctx, rootfs, imgCfg); err != nil {
+		os.RemoveAll(dir)
+		return nil, fmt.Errorf("write image config: %w", err)
+	}
+
 	// Copy the default kernel (images share the same kernel for now).
 	defaultKernel := filepath.Join(im.cfg.ImagesDir, "default", "vmlinux")
 	kernel := filepath.Join(dir, "vmlinux")
@@ -353,6 +365,14 @@ func (im *ImageManager) CreateFromRegistry(ctx context.Context, name, source str
 		}
 	}
 
+	// Persist Env/WorkDir/User defaults so the agent can apply them per exec.
+	imgCfg := registry.ExtractConfig(manifest)
+	if err := imageops.WriteImageConfig(mount.MountDir, imgCfg); err != nil {
+		mount.Close()
+		os.RemoveAll(dir)
+		return nil, fmt.Errorf("write image config: %w", err)
+	}
+
 	if err := mount.Close(); err != nil {
 		os.RemoveAll(dir)
 		return nil, fmt.Errorf("unmount: %w", err)
@@ -368,6 +388,46 @@ func (im *ImageManager) CreateFromRegistry(ctx context.Context, name, source str
 	im.log.Info("image registered from registry",
 		"name", name, "digest", manifest.Digest, "rootfs", rootfs)
 	return im.Get(name)
+}
+
+// dockerInspectConfig pulls Env/WorkingDir/User out of `docker inspect` for a
+// built image tag. Returns a zero-value config if the field is absent.
+func dockerInspectConfig(ctx context.Context, target string) (imageconfig.ImageConfig, error) {
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "--format={{json .Config}}", target).Output()
+	if err != nil {
+		return imageconfig.ImageConfig{}, fmt.Errorf("docker inspect: %w", err)
+	}
+	var raw struct {
+		Env        []string `json:"Env"`
+		WorkingDir string   `json:"WorkingDir"`
+		User       string   `json:"User"`
+	}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return imageconfig.ImageConfig{}, fmt.Errorf("parse docker inspect output: %w", err)
+	}
+	return imageconfig.ImageConfig{
+		Env:     raw.Env,
+		WorkDir: raw.WorkingDir,
+		User:    raw.User,
+	}, nil
+}
+
+// writeImageConfigToRootfs mounts ext4Path and writes the image config file.
+// Linux-only at runtime (uses mount/umount); compiles everywhere.
+func (im *ImageManager) writeImageConfigToRootfs(ctx context.Context, ext4Path string, cfg imageconfig.ImageConfig) error {
+	mountDir := ext4Path + ".cfg-mount"
+	if err := os.MkdirAll(mountDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir mount: %w", err)
+	}
+	defer os.RemoveAll(mountDir)
+
+	mountCmd := exec.CommandContext(ctx, "mount", "-o", "loop", ext4Path, mountDir)
+	if err := mountCmd.Run(); err != nil {
+		return fmt.Errorf("mount: %w", err)
+	}
+	defer exec.CommandContext(ctx, "umount", mountDir).Run()
+
+	return imageops.WriteImageConfig(mountDir, cfg)
 }
 
 // injectAgent copies the pyro-agent binary into the rootfs at /usr/bin/pyro-agent.
