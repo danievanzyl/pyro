@@ -2,9 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/danievanzyl/pyro/internal/sandbox"
+	"github.com/danievanzyl/pyro/internal/sandbox/imagestate"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -96,11 +98,17 @@ func handleCreateImage(imgMgr *sandbox.ImageManager) http.HandlerFunc {
 		}
 
 		if hasSource {
-			// Async: returns immediately with status=pulling. Errors here are
-			// only synchronous validation failures (Begin can't fail today,
-			// but we still propagate as 500 to be future-proof).
+			// Async: returns immediately with status=pulling.
+			// ErrSourceConflict → 409 (concurrent caller with a different
+			// source for the same name). Anything else → 500.
 			info, err := imgMgr.CreateFromRegistry(r.Context(), req.Name, req.Source, nil)
 			if err != nil {
+				if errors.Is(err, imagestate.ErrSourceConflict) {
+					writeJSON(w, http.StatusConflict, map[string]string{
+						"error": err.Error() + " — wait for completion or use force",
+					})
+					return
+				}
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "register failed: " + err.Error()})
 				return
 			}

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -151,6 +152,107 @@ func TestGetImage_SurfacesLedgerState(t *testing.T) {
 type errSentinel string
 
 func (e errSentinel) Error() string { return string(e) }
+
+// TestCreateImage_ConcurrentSameSource_SingleFlight fires N concurrent
+// POSTs against the same name+source. All must return 202; only one
+// underlying registry pull may start (verified by counting
+// image.pulling SSE events on the EventBus — Begin only emits on a
+// fresh entry, attached callers do not re-emit).
+func TestCreateImage_ConcurrentSameSource_SingleFlight(t *testing.T) {
+	r, im := newImageRouterWithManager(t)
+	bus := NewEventBus()
+	im.SetEmitter(bus)
+	ch := bus.Subscribe()
+	defer bus.Unsubscribe(ch)
+
+	const N = 8
+	var wg sync.WaitGroup
+	codes := make([]int, N)
+	bodies := make([]map[string]any, N)
+	startBarrier := make(chan struct{})
+
+	for i := range N {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-startBarrier
+			w := postImage(t, r, map[string]string{
+				"name":   "concur",
+				"source": "127.0.0.1:1/no:such",
+			})
+			codes[i] = w.Code
+			_ = json.Unmarshal(w.Body.Bytes(), &bodies[i])
+		}(i)
+	}
+	close(startBarrier)
+	wg.Wait()
+
+	for i, c := range codes {
+		if c != http.StatusAccepted {
+			t.Errorf("call[%d] code=%d body=%v want 202", i, c, bodies[i])
+		}
+	}
+
+	// Drain events for a short window. Single-flight ⇒ exactly one
+	// image.pulling. (The background goroutine will eventually emit
+	// image.failed too, which is fine.)
+	pulling := 0
+	deadline := time.After(300 * time.Millisecond)
+drain:
+	for {
+		select {
+		case ev := <-ch:
+			if ev.Type == imagestate.EventPulling {
+				pulling++
+			}
+		case <-deadline:
+			break drain
+		}
+	}
+	if pulling != 1 {
+		t.Errorf("image.pulling events = %d want 1 (single-flight violated)", pulling)
+	}
+}
+
+// TestCreateImage_SourceMismatchReturns409 verifies that a second POST
+// for the same name with a *different* source while the first is still
+// in flight returns 409. We seed the ledger directly (no goroutine) so
+// the in-flight state is deterministic.
+func TestCreateImage_SourceMismatchReturns409(t *testing.T) {
+	r, im := newImageRouterWithManager(t)
+	// Seed an in-flight pull for "py312" with source "python:3.12".
+	im.Ledger().Begin("py312", "python:3.12")
+
+	w := postImage(t, r, map[string]string{
+		"name":   "py312",
+		"source": "python:3.13",
+	})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d want 409; body=%s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	errStr, _ := body["error"].(string)
+	if errStr == "" {
+		t.Fatalf("expected non-empty error message; body=%s", w.Body.String())
+	}
+}
+
+// TestCreateImage_SameSourceReturns202 confirms that re-posting the
+// same source against an in-flight pull does not trip the 409 path —
+// it attaches and returns 202.
+func TestCreateImage_SameSourceReturns202(t *testing.T) {
+	r, im := newImageRouterWithManager(t)
+	im.Ledger().Begin("py312", "python:3.12")
+
+	w := postImage(t, r, map[string]string{
+		"name":   "py312",
+		"source": "python:3.12",
+	})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d want 202; body=%s", w.Code, w.Body.String())
+	}
+}
 
 // TestImageLifecycle_EmitsSSEEventsViaBus drives the ledger through the
 // full happy-path transition sequence after wiring the api.EventBus as

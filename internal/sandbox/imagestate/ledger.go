@@ -41,6 +41,13 @@ var ErrInvalidTransition = errors.New("invalid status transition")
 // ErrUnknown signals the ledger has no entry for a name.
 var ErrUnknown = errors.New("no ledger entry for name")
 
+// ErrSourceConflict signals that a Begin attached to an in-flight pull
+// whose source differs from the requested source. The orchestrator
+// surfaces this as a 409 — callers must wait for the in-flight pull to
+// settle (or use force, slice 06) before re-registering with a
+// different source.
+var ErrSourceConflict = errors.New("image name in use with a different source")
+
 // DefaultFailedTTL is how long a failed entry remains queryable.
 const DefaultFailedTTL = time.Hour
 

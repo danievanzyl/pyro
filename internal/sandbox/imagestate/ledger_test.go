@@ -225,6 +225,106 @@ func TestLedger_EmitsFailedEvent(t *testing.T) {
 	}
 }
 
+// TestLedger_ConcurrentBegin_SameName fires N concurrent Begins for one
+// name and asserts exactly one fresh op (attached=false) plus N-1
+// attached. Race-detector clean (mutex serializes Begin).
+func TestLedger_ConcurrentBegin_SameName(t *testing.T) {
+	const N = 32
+	l := New(nil, time.Hour)
+
+	var freshCount, attachedCount int64
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+
+	for range N {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start // align goroutines on a barrier
+			_, attached := l.Begin("py", "python:3.12")
+			mu.Lock()
+			if attached {
+				attachedCount++
+			} else {
+				freshCount++
+			}
+			mu.Unlock()
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if freshCount != 1 {
+		t.Fatalf("fresh begin count = %d want 1", freshCount)
+	}
+	if attachedCount != N-1 {
+		t.Fatalf("attached count = %d want %d", attachedCount, N-1)
+	}
+}
+
+// TestLedger_ConcurrentBegin_DifferentNames: distinct names never
+// collide; every caller should see attached=false.
+func TestLedger_ConcurrentBegin_DifferentNames(t *testing.T) {
+	const N = 16
+	l := New(nil, time.Hour)
+
+	var attachedCount int64
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for i := range N {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			name := "img-" + itoa(i)
+			_, attached := l.Begin(name, "src:"+itoa(i))
+			if attached {
+				mu.Lock()
+				attachedCount++
+				mu.Unlock()
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	if attachedCount != 0 {
+		t.Fatalf("distinct names should never attach; got %d attached", attachedCount)
+	}
+}
+
+// TestLedger_AttachedSeesUpdates verifies an attached caller (who got
+// only a snapshot at Begin time) can poll Get() to observe later
+// transitions driven by the original puller goroutine.
+func TestLedger_AttachedSeesUpdates(t *testing.T) {
+	l := New(nil, time.Hour)
+	first, _ := l.Begin("py", "python:3.12")
+	second, attached := l.Begin("py", "python:3.12")
+	if !attached {
+		t.Fatalf("second begin should be attached")
+	}
+	// Both snapshots reflect the initial pulling state.
+	if first.Status != StatusPulling || second.Status != StatusPulling {
+		t.Fatalf("both snapshots should be pulling; got %s / %s", first.Status, second.Status)
+	}
+	// Driver advances the entry…
+	if err := l.Update("py", StatusExtracting); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	// …and the attached caller sees it via Get().
+	if got := l.Get("py"); got == nil || got.Status != StatusExtracting {
+		t.Fatalf("attached poll should see extracting; got %+v", got)
+	}
+}
+
+// itoa avoids the strconv import for a single-digit integer-to-string.
+func itoa(i int) string {
+	if i < 10 {
+		return string(rune('0' + i))
+	}
+	return string(rune('a'+i-10)) // up to 36; tests use <32
+}
+
 func TestLedger_AttachedBeginDoesNotEmit(t *testing.T) {
 	emitter := &captureEmitter{}
 	l := New(nil, time.Hour)

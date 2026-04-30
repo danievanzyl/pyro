@@ -418,8 +418,13 @@ func (im *ImageManager) CreateFromRegistry(ctx context.Context, name, source str
 
 	op, attached := im.ledger.Begin(name, source)
 	if attached {
-		// Slice 05 wires concurrent attach end-to-end; for now both callers
-		// see the same in-flight state.
+		// Single-flight: a concurrent caller arrived during an in-flight
+		// pull. If the source matches, return the same in-flight state;
+		// the puller goroutine continues unchanged. If the source differs,
+		// surface ErrSourceConflict — handler maps to 409.
+		if op.Source != source {
+			return nil, fmt.Errorf("%w: in-flight source %q, requested %q", imagestate.ErrSourceConflict, op.Source, source)
+		}
 		return &ImageInfo{
 			Name:   op.Name,
 			Status: op.Status,
