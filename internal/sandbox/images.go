@@ -19,21 +19,32 @@ package sandbox
 
 import (
 	"cmp"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/danievanzyl/pyro/internal/sandbox/imageconfig"
 	"github.com/danievanzyl/pyro/internal/sandbox/imageops"
 	"github.com/danievanzyl/pyro/internal/sandbox/imagestate"
 	"github.com/danievanzyl/pyro/internal/sandbox/registry"
+)
+
+// progressEmitInterval throttles per-layer image.layer_progress events.
+// Emit when either threshold is crossed since the last emit; final
+// emit is always sent at layer end.
+const (
+	progressByteThreshold = 1 << 20 // 1 MiB
+	progressTimeThreshold = 250 * time.Millisecond
 )
 
 // imageMetaName is the on-disk metadata sidecar persisted next to
@@ -54,9 +65,22 @@ type ImageConfig struct {
 
 // ImageManager handles base image lifecycle.
 type ImageManager struct {
-	cfg    ImageConfig
-	log    *slog.Logger
-	ledger *imagestate.Ledger
+	cfg     ImageConfig
+	log     *slog.Logger
+	ledger  *imagestate.Ledger
+	emitter imagestate.Emitter
+}
+
+// SetEmitter wires an event emitter for image lifecycle SSE events.
+// The same emitter is installed on the underlying ledger.
+func (im *ImageManager) SetEmitter(e imagestate.Emitter) {
+	if e == nil {
+		im.emitter = nil
+		im.ledger.SetEmitter(nil)
+		return
+	}
+	im.emitter = e
+	im.ledger.SetEmitter(e)
 }
 
 // ImageInfo describes a stored base image.
@@ -448,11 +472,6 @@ func (im *ImageManager) runRegistryPull(ctx context.Context, name, source string
 	}
 	sizeMB := int(totalBytes/(1<<20)*13/10) + 64
 
-	if err := im.ledger.Update(name, imagestate.StatusExtracting); err != nil {
-		fail(fmt.Errorf("ledger transition: %w", err))
-		return
-	}
-
 	builder := imageops.NewExt4Builder()
 	mount, err := builder.Create(ctx, rootfs, sizeMB)
 	if err != nil {
@@ -460,21 +479,22 @@ func (im *ImageManager) runRegistryPull(ctx context.Context, name, source string
 		return
 	}
 
+	// Layer download + tar extraction runs in the pulling phase so the
+	// per-layer progress events all fire before image.extracting (which
+	// represents finalization: agent inject, image-config write, unmount).
 	extractor := imageops.NewLayerExtractor()
 	for _, layer := range manifest.Layers {
-		rc, err := manifest.LayerReader(layer.Digest)
-		if err != nil {
+		if err := im.extractLayer(name, layer, manifest, extractor, mount.MountDir); err != nil {
 			mount.Close()
-			fail(fmt.Errorf("open layer %s: %w", layer.Digest, err))
+			fail(err)
 			return
 		}
-		if err := extractor.Extract(mount.MountDir, rc); err != nil {
-			rc.Close()
-			mount.Close()
-			fail(fmt.Errorf("extract layer %s: %w", layer.Digest, err))
-			return
-		}
-		rc.Close()
+	}
+
+	if err := im.ledger.Update(name, imagestate.StatusExtracting); err != nil {
+		mount.Close()
+		fail(fmt.Errorf("ledger transition: %w", err))
+		return
 	}
 
 	// Inject agent while still mounted.
@@ -517,13 +537,117 @@ func (im *ImageManager) runRegistryPull(ctx context.Context, name, source string
 		return
 	}
 
-	if err := im.ledger.Complete(name); err != nil {
+	// Capture final rootfs size for the image.ready event payload.
+	var rootfsSize int64
+	if st, err := os.Stat(rootfs); err == nil {
+		rootfsSize = st.Size()
+	}
+
+	if err := im.ledger.Complete(name, rootfsSize); err != nil {
 		// Couldn't transition the ledger but the on-disk image is sound;
 		// keep it and surface the inconsistency in the log.
 		im.log.Warn("ledger complete failed", "name", name, "err", err)
 	}
 	im.log.Info("image registered from registry",
 		"name", name, "digest", manifest.Digest, "rootfs", rootfs)
+}
+
+// extractLayer pulls a single layer over the wire (compressed), meters
+// network bytes for image.layer_progress events, decompresses, and
+// extracts to dst. layer_progress events are only emitted while the
+// ledger is in extracting (Update→extracting must have run first); the
+// orchestrator guarantees that ordering by calling this only after the
+// ledger transition.
+func (im *ImageManager) extractLayer(
+	imageName string,
+	layer registry.LayerInfo,
+	manifest *registry.Manifest,
+	extractor *imageops.LayerExtractor,
+	dst string,
+) error {
+	rawRC, err := manifest.CompressedLayerReader(layer.Digest)
+	if err != nil {
+		return fmt.Errorf("open layer %s: %w", layer.Digest, err)
+	}
+	defer rawRC.Close()
+
+	pr := newProgressReader(rawRC, layer.Size, func(done int64) {
+		if im.emitter == nil {
+			return
+		}
+		im.emitter.Publish(imagestate.EventLayerProgress, map[string]any{
+			"name":         imageName,
+			"layer_digest": layer.Digest,
+			"bytes_done":   done,
+			"bytes_total":  layer.Size,
+		})
+	})
+
+	gz, err := gzip.NewReader(pr)
+	if err != nil {
+		return fmt.Errorf("gunzip layer %s: %w", layer.Digest, err)
+	}
+	defer gz.Close()
+
+	if err := extractor.Extract(dst, gz); err != nil {
+		return fmt.Errorf("extract layer %s: %w", layer.Digest, err)
+	}
+
+	// Final progress emit — bytes_done == bytes_total.
+	pr.flushFinal()
+	return nil
+}
+
+// progressReader counts bytes flowing through the underlying reader and
+// invokes onEmit at most once per progressByteThreshold bytes or
+// progressTimeThreshold of wall-clock time. Final emit is sent
+// explicitly via flushFinal.
+type progressReader struct {
+	r           io.Reader
+	total       int64
+	read        atomic.Int64
+	lastEmitted int64
+	lastEmitAt  time.Time
+	onEmit      func(bytesDone int64)
+	emittedFinal bool
+}
+
+func newProgressReader(r io.Reader, total int64, onEmit func(int64)) *progressReader {
+	return &progressReader{
+		r:          r,
+		total:      total,
+		onEmit:     onEmit,
+		lastEmitAt: time.Now(),
+	}
+}
+
+func (p *progressReader) Read(buf []byte) (int, error) {
+	n, err := p.r.Read(buf)
+	if n > 0 {
+		done := p.read.Add(int64(n))
+		bytesSinceEmit := done - p.lastEmitted
+		if bytesSinceEmit >= progressByteThreshold ||
+			time.Since(p.lastEmitAt) >= progressTimeThreshold {
+			p.lastEmitted = done
+			p.lastEmitAt = time.Now()
+			p.onEmit(done)
+		}
+	}
+	return n, err
+}
+
+func (p *progressReader) flushFinal() {
+	if p.emittedFinal {
+		return
+	}
+	p.emittedFinal = true
+	done := p.read.Load()
+	if p.total > 0 && done < p.total {
+		// EOF was reached early — emit the smaller of the two so consumers
+		// don't see bytes_done < bytes_total at the end.
+		done = p.total
+	}
+	p.onEmit(done)
 }
 
 // dockerInspectConfig pulls Env/WorkingDir/User out of `docker inspect` for a

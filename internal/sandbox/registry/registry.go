@@ -187,6 +187,22 @@ func (m *Manifest) LayerReader(digest string) (io.ReadCloser, error) {
 	return nil, fmt.Errorf("layer %s not found in manifest", digest)
 }
 
+// CompressedLayerReader opens the on-the-wire (compressed) byte stream
+// for a layer. Used to meter network progress accurately — bytes read
+// here track exactly against LayerInfo.Size. Caller must gunzip + close.
+func (m *Manifest) CompressedLayerReader(digest string) (io.ReadCloser, error) {
+	for _, l := range m.layersByDigest() {
+		d, err := l.Digest()
+		if err != nil {
+			return nil, err
+		}
+		if d.String() == digest {
+			return l.Compressed()
+		}
+	}
+	return nil, fmt.Errorf("layer %s not found in manifest", digest)
+}
+
 // layersByDigest returns the underlying v1.Layer slice in order.
 func (m *Manifest) layersByDigest() []v1.Layer {
 	if m.image == nil {

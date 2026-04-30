@@ -1,0 +1,289 @@
+package sandbox
+
+import (
+	"archive/tar"
+	"bytes"
+	"context"
+	"io"
+	"log/slog"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/danievanzyl/pyro/internal/sandbox/imageops"
+	"github.com/danievanzyl/pyro/internal/sandbox/imagestate"
+	"github.com/danievanzyl/pyro/internal/sandbox/registry"
+	ggcrname "github.com/google/go-containerregistry/pkg/name"
+	ggcrregistry "github.com/google/go-containerregistry/pkg/registry"
+	"github.com/google/go-containerregistry/pkg/v1/empty"
+	"github.com/google/go-containerregistry/pkg/v1/mutate"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/tarball"
+	"github.com/google/go-containerregistry/pkg/v1/types"
+)
+
+// captureEmitter records every event published, thread-safe.
+type captureEmitter struct {
+	mu     sync.Mutex
+	events []capturedEvent
+}
+
+type capturedEvent struct {
+	Type    string
+	Payload map[string]any
+}
+
+func (c *captureEmitter) Publish(eventType string, data any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	m, _ := data.(map[string]any)
+	c.events = append(c.events, capturedEvent{Type: eventType, Payload: m})
+}
+
+func (c *captureEmitter) snapshot() []capturedEvent {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]capturedEvent, len(c.events))
+	copy(out, c.events)
+	return out
+}
+
+// pushLayerImage pushes a tiny single-arch amd64 image with one tar layer
+// of the given byte payload. Returns the registry ref.
+func pushLayerImage(t *testing.T, host, repo, tag string, layerBytes []byte) string {
+	t.Helper()
+	layer, err := tarball.LayerFromOpener(func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(layerBytes)), nil
+	}, tarball.WithMediaType(types.DockerLayer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := mutate.AppendLayers(empty.Image, layer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := img.ConfigFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OS = "linux"
+	cfg.Architecture = "amd64"
+	img, err = mutate.ConfigFile(img, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ref := host + "/" + repo + ":" + tag
+	parsed, err := ggcrname.ParseReference(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := remote.Write(parsed, img); err != nil {
+		t.Fatal(err)
+	}
+	return ref
+}
+
+// buildTar packages a single regular file with the given body.
+func buildTar(t *testing.T, name string, body []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{
+		Name:     name,
+		Mode:     0o644,
+		Size:     int64(len(body)),
+		Typeflag: tar.TypeReg,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// TestExtractLayer_EmitsProgressMonotonic exercises the orchestrator's
+// per-layer download+extract path with a real httptest OCI registry. It
+// verifies image.layer_progress events fire with monotonically
+// increasing bytes_done and a final value matching layer.Size. Runs on
+// macOS — extractLayer doesn't touch ext4.
+func TestExtractLayer_EmitsProgressMonotonic(t *testing.T) {
+	srv := httptest.NewServer(ggcrregistry.New())
+	defer srv.Close()
+	host, err := hostOf(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Make a layer ~3 MiB so we cross the 1 MiB byte threshold a few times.
+	payload := bytes.Repeat([]byte{'x'}, 3<<20)
+	tarBytes := buildTar(t, "marker", payload)
+	ref := pushLayerImage(t, host, "test/progress", "v1", tarBytes)
+
+	manifest, err := registry.New().Resolve(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(manifest.Layers) != 1 {
+		t.Fatalf("layers = %d want 1", len(manifest.Layers))
+	}
+
+	emitter := &captureEmitter{}
+	im := &ImageManager{
+		cfg:     ImageConfig{ImagesDir: t.TempDir()},
+		log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		ledger:  imagestate.New(nil, time.Hour),
+		emitter: emitter,
+	}
+
+	dst := t.TempDir()
+	extractor := imageops.NewLayerExtractor()
+	if err := im.extractLayer("img", manifest.Layers[0], manifest, extractor, dst); err != nil {
+		t.Fatalf("extractLayer: %v", err)
+	}
+
+	// Verify file extracted.
+	body, err := os.ReadFile(dst + "/marker")
+	if err != nil {
+		t.Fatalf("read marker: %v", err)
+	}
+	if len(body) != len(payload) {
+		t.Errorf("marker size = %d want %d", len(body), len(payload))
+	}
+
+	events := emitter.snapshot()
+	if len(events) == 0 {
+		t.Fatalf("no progress events emitted")
+	}
+
+	var lastDone int64
+	var lastDigest string
+	layerSize := manifest.Layers[0].Size
+	layerDigest := manifest.Layers[0].Digest
+	for i, ev := range events {
+		if ev.Type != imagestate.EventLayerProgress {
+			t.Errorf("event[%d] type = %s want %s", i, ev.Type, imagestate.EventLayerProgress)
+			continue
+		}
+		if ev.Payload["name"] != "img" {
+			t.Errorf("event[%d] name = %v", i, ev.Payload["name"])
+		}
+		ld, _ := ev.Payload["layer_digest"].(string)
+		if ld != layerDigest {
+			t.Errorf("event[%d] layer_digest = %s want %s", i, ld, layerDigest)
+		}
+		lastDigest = ld
+		done, _ := ev.Payload["bytes_done"].(int64)
+		total, _ := ev.Payload["bytes_total"].(int64)
+		if total != layerSize {
+			t.Errorf("event[%d] bytes_total = %d want %d", i, total, layerSize)
+		}
+		if done < lastDone {
+			t.Errorf("event[%d] bytes_done %d < prior %d (not monotonic)", i, done, lastDone)
+		}
+		lastDone = done
+	}
+	if lastDigest == "" {
+		t.Errorf("layer digest never set")
+	}
+	// Final emit guarantees bytes_done == bytes_total.
+	if lastDone != layerSize {
+		t.Errorf("final bytes_done = %d want %d", lastDone, layerSize)
+	}
+}
+
+// TestExtractLayer_SmallLayerFinalEmitOnly verifies a tiny layer (<1 MiB
+// downloaded fast) emits at most a couple of progress events — the
+// final emit always fires, so the lower bound is 1.
+func TestExtractLayer_SmallLayerFinalEmitOnly(t *testing.T) {
+	srv := httptest.NewServer(ggcrregistry.New())
+	defer srv.Close()
+	host, err := hostOf(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tarBytes := buildTar(t, "tiny", []byte("ok"))
+	ref := pushLayerImage(t, host, "test/tiny", "v1", tarBytes)
+
+	manifest, err := registry.New().Resolve(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	emitter := &captureEmitter{}
+	im := &ImageManager{
+		cfg:     ImageConfig{ImagesDir: t.TempDir()},
+		log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		ledger:  imagestate.New(nil, time.Hour),
+		emitter: emitter,
+	}
+
+	dst := t.TempDir()
+	if err := im.extractLayer("img", manifest.Layers[0], manifest, imageops.NewLayerExtractor(), dst); err != nil {
+		t.Fatalf("extractLayer: %v", err)
+	}
+
+	events := emitter.snapshot()
+	if len(events) == 0 || len(events) > 3 {
+		t.Errorf("small layer event count = %d, expected 1–3", len(events))
+	}
+	for _, ev := range events {
+		if ev.Type != imagestate.EventLayerProgress {
+			t.Errorf("unexpected event type: %s", ev.Type)
+		}
+	}
+}
+
+// TestProgressReader_FlushFinalEmitsTotalOnEarlyEOF guards against the
+// case where the on-the-wire bytes are fewer than layer.Size — the
+// final emit clamps bytes_done up to bytes_total so consumers don't
+// see bytes_done<bytes_total at completion.
+func TestProgressReader_FlushFinalEmitsTotalOnEarlyEOF(t *testing.T) {
+	got := []int64{}
+	pr := newProgressReader(bytes.NewReader([]byte("hi")), 100, func(d int64) {
+		got = append(got, d)
+	})
+	_, _ = io.ReadAll(pr)
+	pr.flushFinal()
+
+	if len(got) == 0 {
+		t.Fatalf("flushFinal must emit at least once")
+	}
+	last := got[len(got)-1]
+	if last != 100 {
+		t.Errorf("final bytes_done = %d want 100 (clamped to total)", last)
+	}
+}
+
+// TestProgressReader_NoEmitWithoutBytes ensures Read with zero bytes
+// does not trigger an emit (only the explicit flushFinal does).
+func TestProgressReader_NoEmitWithoutBytes(t *testing.T) {
+	called := 0
+	pr := newProgressReader(bytes.NewReader(nil), 50, func(d int64) {
+		called++
+	})
+	_, _ = io.ReadAll(pr)
+	if called != 0 {
+		t.Errorf("emit fired without bytes; called=%d", called)
+	}
+	pr.flushFinal()
+	if called != 1 {
+		t.Errorf("flushFinal should fire once; called=%d", called)
+	}
+}
+
+func hostOf(rawURL string) (string, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+	return u.Host, nil
+}

@@ -151,3 +151,105 @@ func TestGetImage_SurfacesLedgerState(t *testing.T) {
 type errSentinel string
 
 func (e errSentinel) Error() string { return string(e) }
+
+// TestImageLifecycle_EmitsSSEEventsViaBus drives the ledger through the
+// full happy-path transition sequence after wiring the api.EventBus as
+// the emitter. Verifies subscribers see image.pulling →
+// image.extracting → image.ready in order with the right payloads.
+// Ledger emission is exercised directly so the test runs anywhere
+// (the registry-pull goroutine isn't needed to validate the SSE wire).
+func TestImageLifecycle_EmitsSSEEventsViaBus(t *testing.T) {
+	dir := t.TempDir()
+	im, err := sandbox.NewImageManager(sandbox.ImageConfig{ImagesDir: dir}, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bus := NewEventBus()
+	im.SetEmitter(bus)
+	ch := bus.Subscribe()
+	defer bus.Unsubscribe(ch)
+
+	// Drive the ledger transitions like the orchestrator does.
+	im.Ledger().Begin("py312", "python:3.12")
+	if err := im.Ledger().SetDigest("py312", "sha256:dead"); err != nil {
+		t.Fatalf("set digest: %v", err)
+	}
+	if err := im.Ledger().Update("py312", imagestate.StatusExtracting); err != nil {
+		t.Fatalf("→extracting: %v", err)
+	}
+	if err := im.Ledger().Complete("py312", 4096); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	want := []string{imagestate.EventPulling, imagestate.EventExtracting, imagestate.EventReady}
+	got := make([]string, 0, len(want))
+	deadline := time.After(2 * time.Second)
+	for len(got) < len(want) {
+		select {
+		case ev := <-ch:
+			if ev.Type == "connected" {
+				continue
+			}
+			got = append(got, ev.Type)
+		case <-deadline:
+			t.Fatalf("only received %d events: %v want %v", len(got), got, want)
+		}
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("event[%d] = %s want %s", i, got[i], want[i])
+		}
+	}
+}
+
+// TestImageLifecycle_EmitsFailedEvent covers the error path: when
+// runRegistryPull (or the ledger) calls Fail, subscribers receive
+// image.pulling followed by image.failed with the error.
+func TestImageLifecycle_EmitsFailedEvent(t *testing.T) {
+	dir := t.TempDir()
+	im, err := sandbox.NewImageManager(sandbox.ImageConfig{ImagesDir: dir}, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bus := NewEventBus()
+	im.SetEmitter(bus)
+	ch := bus.Subscribe()
+	defer bus.Unsubscribe(ch)
+
+	im.Ledger().Begin("brokenpy", "python:3.12")
+	if err := im.Ledger().Fail("brokenpy", errSentinel("registry unreachable")); err != nil {
+		t.Fatalf("fail: %v", err)
+	}
+
+	want := []string{imagestate.EventPulling, imagestate.EventFailed}
+	var failPayload map[string]any
+	got := make([]string, 0, len(want))
+	deadline := time.After(2 * time.Second)
+	for len(got) < len(want) {
+		select {
+		case ev := <-ch:
+			if ev.Type == "connected" {
+				continue
+			}
+			got = append(got, ev.Type)
+			if ev.Type == imagestate.EventFailed {
+				failPayload, _ = ev.Data.(map[string]any)
+			}
+		case <-deadline:
+			t.Fatalf("only received %d events: %v want %v", len(got), got, want)
+		}
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("event[%d] = %s want %s", i, got[i], want[i])
+		}
+	}
+	if failPayload["name"] != "brokenpy" {
+		t.Errorf("failed payload name = %v want brokenpy", failPayload["name"])
+	}
+	if failPayload["error"] != "registry unreachable" {
+		t.Errorf("failed payload error = %v", failPayload["error"])
+	}
+}

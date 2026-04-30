@@ -24,6 +24,17 @@ const (
 	StatusFailed     Status = "failed"
 )
 
+// Event type names emitted on ledger transitions. The orchestrator emits
+// EventLayerProgress directly (it's a per-layer side effect, not a
+// ledger transition).
+const (
+	EventPulling       = "image.pulling"
+	EventLayerProgress = "image.layer_progress"
+	EventExtracting    = "image.extracting"
+	EventReady         = "image.ready"
+	EventFailed        = "image.failed"
+)
+
 // ErrInvalidTransition signals a forbidden status change.
 var ErrInvalidTransition = errors.New("invalid status transition")
 
@@ -37,6 +48,19 @@ const DefaultFailedTTL = time.Hour
 type Clock interface {
 	Now() time.Time
 }
+
+// Emitter is the side-effect sink for ledger transitions.
+//
+// Implementations publish events to subscribers (e.g. SSE clients).
+// The interface matches api.EventBus.Publish so the bus can be passed
+// directly without an adapter.
+type Emitter interface {
+	Publish(eventType string, data any)
+}
+
+type nopEmitter struct{}
+
+func (nopEmitter) Publish(string, any) {}
 
 type realClock struct{}
 
@@ -73,6 +97,17 @@ type Ledger struct {
 	entries   map[string]*PullOp
 	clock     Clock
 	failedTTL time.Duration
+	emitter   Emitter
+}
+
+// SetEmitter installs an emitter; pass nil to disable. Safe to call once
+// at wiring time. Not safe to call concurrently with ledger transitions.
+func (l *Ledger) SetEmitter(e Emitter) {
+	if e == nil {
+		l.emitter = nopEmitter{}
+		return
+	}
+	l.emitter = e
 }
 
 // New constructs a Ledger with the supplied clock. A nil clock falls back
@@ -88,6 +123,7 @@ func New(clock Clock, failedTTL time.Duration) *Ledger {
 		entries:   make(map[string]*PullOp),
 		clock:     clock,
 		failedTTL: failedTTL,
+		emitter:   nopEmitter{},
 	}
 }
 
@@ -100,12 +136,13 @@ func New(clock Clock, failedTTL time.Duration) *Ledger {
 // paths.
 func (l *Ledger) Begin(name, source string) (*PullOp, bool) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	l.gcLocked()
 	if existing, ok := l.entries[name]; ok {
 		switch existing.Status {
 		case StatusPulling, StatusExtracting:
-			return existing.Clone(), true
+			cloned := existing.Clone()
+			l.mu.Unlock()
+			return cloned, true
 		}
 		// failed (or stale ready) → replace.
 	}
@@ -118,23 +155,37 @@ func (l *Ledger) Begin(name, source string) (*PullOp, bool) {
 		UpdatedAt: now,
 	}
 	l.entries[name] = op
-	return op.Clone(), false
+	cloned := op.Clone()
+	l.mu.Unlock()
+
+	l.emitter.Publish(EventPulling, map[string]any{
+		"name":   name,
+		"source": source,
+	})
+	return cloned, false
 }
 
 // Update advances the status of a pull. Allowed: pulling→extracting.
 // Other transitions return ErrInvalidTransition.
 func (l *Ledger) Update(name string, next Status) error {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	op, ok := l.entries[name]
 	if !ok {
+		l.mu.Unlock()
 		return ErrUnknown
 	}
 	if !canTransition(op.Status, next) {
-		return fmt.Errorf("%w: %s → %s", ErrInvalidTransition, op.Status, next)
+		err := fmt.Errorf("%w: %s → %s", ErrInvalidTransition, op.Status, next)
+		l.mu.Unlock()
+		return err
 	}
 	op.Status = next
 	op.UpdatedAt = l.clock.Now()
+	l.mu.Unlock()
+
+	if next == StatusExtracting {
+		l.emitter.Publish(EventExtracting, map[string]any{"name": name})
+	}
 	return nil
 }
 
@@ -152,18 +203,29 @@ func (l *Ledger) SetDigest(name, digest string) error {
 }
 
 // Complete marks the pull successful and drops the ledger entry. Disk
-// metadata becomes authoritative. Idempotent.
-func (l *Ledger) Complete(name string) error {
+// metadata becomes authoritative. sizeBytes is the final rootfs size,
+// surfaced on the image.ready event for dashboard display.
+func (l *Ledger) Complete(name string, sizeBytes int64) error {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	op, ok := l.entries[name]
 	if !ok {
+		l.mu.Unlock()
 		return ErrUnknown
 	}
 	if !canTransition(op.Status, StatusReady) {
-		return fmt.Errorf("%w: %s → %s", ErrInvalidTransition, op.Status, StatusReady)
+		err := fmt.Errorf("%w: %s → %s", ErrInvalidTransition, op.Status, StatusReady)
+		l.mu.Unlock()
+		return err
 	}
+	digest := op.Digest
 	delete(l.entries, name)
+	l.mu.Unlock()
+
+	l.emitter.Publish(EventReady, map[string]any{
+		"name":   name,
+		"digest": digest,
+		"size":   sizeBytes,
+	})
 	return nil
 }
 
@@ -171,21 +233,31 @@ func (l *Ledger) Complete(name string) error {
 // FailedTTL elapses (or until a fresh Begin replaces it).
 func (l *Ledger) Fail(name string, errIn error) error {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	op, ok := l.entries[name]
 	if !ok {
+		l.mu.Unlock()
 		return ErrUnknown
 	}
 	if !canTransition(op.Status, StatusFailed) {
-		return fmt.Errorf("%w: %s → %s", ErrInvalidTransition, op.Status, StatusFailed)
+		err := fmt.Errorf("%w: %s → %s", ErrInvalidTransition, op.Status, StatusFailed)
+		l.mu.Unlock()
+		return err
 	}
 	now := l.clock.Now()
 	op.Status = StatusFailed
 	op.UpdatedAt = now
 	op.CompletedAt = now
+	var errMsg string
 	if errIn != nil {
-		op.Error = errIn.Error()
+		errMsg = errIn.Error()
+		op.Error = errMsg
 	}
+	l.mu.Unlock()
+
+	l.emitter.Publish(EventFailed, map[string]any{
+		"name":  name,
+		"error": errMsg,
+	})
 	return nil
 }
 

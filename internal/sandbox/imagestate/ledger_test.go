@@ -2,6 +2,7 @@ package imagestate
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -32,7 +33,7 @@ func TestLedger_HappyPath(t *testing.T) {
 	if got == nil || got.Status != StatusExtracting || got.Digest != "sha256:abc" {
 		t.Fatalf("after update: %+v", got)
 	}
-	if err := l.Complete("py"); err != nil {
+	if err := l.Complete("py", 0); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	if l.Get("py") != nil {
@@ -112,7 +113,7 @@ func TestLedger_RejectsInvalidTransition(t *testing.T) {
 	}
 
 	_ = l.Update("py", StatusExtracting)
-	_ = l.Complete("py") // ledger entry now gone
+	_ = l.Complete("py", 0) // ledger entry now gone
 
 	// ready→pulling: re-Begin produces a *new* pulling entry, which is the
 	// intended escape hatch — not a transition on the old terminal state.
@@ -127,7 +128,112 @@ func TestLedger_CompleteRequiresExtracting(t *testing.T) {
 	l := New(nil, time.Hour)
 	l.Begin("py", "python:3.12")
 	// Trying to jump pulling→ready directly is invalid.
-	if err := l.Complete("py"); !errors.Is(err, ErrInvalidTransition) {
+	if err := l.Complete("py", 0); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("pulling→ready via Complete should be rejected; got %v", err)
+	}
+}
+
+// captureEmitter records every event for assertion. Safe for concurrent
+// publishers but tests here run single-threaded so the channel-free
+// slice is fine.
+type captureEmitter struct {
+	mu     sync.Mutex
+	events []capturedEvent
+}
+
+type capturedEvent struct {
+	Type    string
+	Payload map[string]any
+}
+
+func (c *captureEmitter) Publish(eventType string, data any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	m, _ := data.(map[string]any)
+	c.events = append(c.events, capturedEvent{Type: eventType, Payload: m})
+}
+
+func (c *captureEmitter) types() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]string, len(c.events))
+	for i, e := range c.events {
+		out[i] = e.Type
+	}
+	return out
+}
+
+func TestLedger_EmitsHappyPathEvents(t *testing.T) {
+	emitter := &captureEmitter{}
+	l := New(nil, 0)
+	l.SetEmitter(emitter)
+
+	l.Begin("py", "python:3.12")
+	if err := l.SetDigest("py", "sha256:abc"); err != nil {
+		t.Fatalf("set digest: %v", err)
+	}
+	if err := l.Update("py", StatusExtracting); err != nil {
+		t.Fatalf("→extracting: %v", err)
+	}
+	if err := l.Complete("py", 12345); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	want := []string{EventPulling, EventExtracting, EventReady}
+	got := emitter.types()
+	if len(got) != len(want) {
+		t.Fatalf("event count = %d (%v) want %d (%v)", len(got), got, len(want), want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("event[%d] = %s want %s", i, got[i], want[i])
+		}
+	}
+
+	// Pulling payload carries name + source.
+	if p := emitter.events[0].Payload; p["name"] != "py" || p["source"] != "python:3.12" {
+		t.Errorf("pulling payload = %+v", p)
+	}
+	// Extracting payload carries name only.
+	if p := emitter.events[1].Payload; p["name"] != "py" {
+		t.Errorf("extracting payload = %+v", p)
+	}
+	// Ready payload carries name + digest + size.
+	if p := emitter.events[2].Payload; p["name"] != "py" || p["digest"] != "sha256:abc" || p["size"] != int64(12345) {
+		t.Errorf("ready payload = %+v", p)
+	}
+}
+
+func TestLedger_EmitsFailedEvent(t *testing.T) {
+	emitter := &captureEmitter{}
+	l := New(nil, time.Hour)
+	l.SetEmitter(emitter)
+
+	l.Begin("py", "python:3.12")
+	if err := l.Fail("py", errors.New("registry unreachable")); err != nil {
+		t.Fatalf("fail: %v", err)
+	}
+
+	got := emitter.types()
+	want := []string{EventPulling, EventFailed}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("events = %v want %v", got, want)
+	}
+	p := emitter.events[1].Payload
+	if p["name"] != "py" || p["error"] != "registry unreachable" {
+		t.Errorf("failed payload = %+v", p)
+	}
+}
+
+func TestLedger_AttachedBeginDoesNotEmit(t *testing.T) {
+	emitter := &captureEmitter{}
+	l := New(nil, time.Hour)
+	l.SetEmitter(emitter)
+
+	l.Begin("py", "python:3.12") // 1 emit
+	l.Begin("py", "python:3.12") // attach — no extra emit
+
+	if got := emitter.types(); len(got) != 1 || got[0] != EventPulling {
+		t.Fatalf("attached begin should not re-emit pulling; got %v", got)
 	}
 }
