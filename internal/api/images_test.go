@@ -1,11 +1,15 @@
 package api
 
 import (
+	"archive/tar"
 	"bytes"
+	cryptorand "crypto/rand"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"sync"
 	"testing"
@@ -14,6 +18,13 @@ import (
 	"github.com/danievanzyl/pyro/internal/sandbox"
 	"github.com/danievanzyl/pyro/internal/sandbox/imagestate"
 	"github.com/go-chi/chi/v5"
+	ggcrname "github.com/google/go-containerregistry/pkg/name"
+	ggcrregistry "github.com/google/go-containerregistry/pkg/registry"
+	"github.com/google/go-containerregistry/pkg/v1/empty"
+	"github.com/google/go-containerregistry/pkg/v1/mutate"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/tarball"
+	"github.com/google/go-containerregistry/pkg/v1/types"
 )
 
 func newImageRouter(t *testing.T) http.Handler {
@@ -70,11 +81,17 @@ func TestCreateImage_RejectsMissingName(t *testing.T) {
 }
 
 // newImageRouterWithManager exposes the manager so tests can inspect or
-// drive the ledger directly.
+// drive the ledger directly. Size cap is disabled (-1) — tests against
+// unreachable registries would otherwise fail the sync LayerSizes
+// resolve before reaching Begin. The size-cap path has its own
+// fixture-served test.
 func newImageRouterWithManager(t *testing.T) (http.Handler, *sandbox.ImageManager) {
 	t.Helper()
 	dir := t.TempDir()
-	im, err := sandbox.NewImageManager(sandbox.ImageConfig{ImagesDir: dir}, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	im, err := sandbox.NewImageManager(sandbox.ImageConfig{
+		ImagesDir:      dir,
+		MaxImageSizeMB: -1,
+	}, slog.New(slog.NewTextHandler(os.Stderr, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,6 +169,124 @@ func TestGetImage_SurfacesLedgerState(t *testing.T) {
 type errSentinel string
 
 func (e errSentinel) Error() string { return string(e) }
+
+// pushTestImage pushes a small amd64 image with a single layer of the
+// given size in MiB onto an httptest registry. Layer payload is
+// incompressible random bytes so the manifest layer size matches MiB
+// (a bytes.Repeat payload would compress to kilobytes and bypass the
+// size cap). Returns the ref string.
+func pushTestImage(t *testing.T, host, repo, tag string, layerMiB int) string {
+	t.Helper()
+	payload := make([]byte, layerMiB<<20)
+	if _, err := cryptorand.Read(payload); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{
+		Name:     "marker",
+		Mode:     0o644,
+		Size:     int64(len(payload)),
+		Typeflag: tar.TypeReg,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	layer, err := tarball.LayerFromOpener(func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(buf.Bytes())), nil
+	}, tarball.WithMediaType(types.DockerLayer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := mutate.AppendLayers(empty.Image, layer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := img.ConfigFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OS = "linux"
+	cfg.Architecture = "amd64"
+	img, err = mutate.ConfigFile(img, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ref := host + "/" + repo + ":" + tag
+	parsed, err := ggcrname.ParseReference(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := remote.Write(parsed, img); err != nil {
+		t.Fatal(err)
+	}
+	return ref
+}
+
+// TestCreateImage_SizeCapReturns413 verifies the disk-cap path: a
+// fixture-served image with a layer larger than the configured cap is
+// rejected synchronously with 413 + a body carrying limit_mb and
+// estimated_mb. No background goroutine is started.
+func TestCreateImage_SizeCapReturns413(t *testing.T) {
+	srv := httptest.NewServer(ggcrregistry.New())
+	defer srv.Close()
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := pushTestImage(t, u.Host, "test/big", "v1", 3) // ~3 MiB layer
+
+	dir := t.TempDir()
+	im, err := sandbox.NewImageManager(sandbox.ImageConfig{
+		ImagesDir:      dir,
+		MaxImageSizeMB: 1, // tiny cap forces 413
+	}, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := chi.NewRouter()
+	SetupImageRoutes(r, im)
+
+	w := postImage(t, r, map[string]string{
+		"name":   "big",
+		"source": ref,
+	})
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d want 413; body=%s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, w.Body.String())
+	}
+	if body["error"] != "image too large" {
+		t.Errorf("error = %v want \"image too large\"", body["error"])
+	}
+	// JSON numbers decode as float64.
+	limit, ok := body["limit_mb"].(float64)
+	if !ok || int(limit) != 1 {
+		t.Errorf("limit_mb = %v (%T) want 1", body["limit_mb"], body["limit_mb"])
+	}
+	est, ok := body["estimated_mb"].(float64)
+	if !ok || est <= 0 {
+		t.Errorf("estimated_mb = %v want > 0", body["estimated_mb"])
+	}
+
+	// No on-disk dir was created.
+	if _, err := os.Stat(dir + "/big"); !os.IsNotExist(err) {
+		t.Errorf("image dir should not exist after 413 (err=%v)", err)
+	}
+	// No ledger entry.
+	if op := im.Ledger().Get("big"); op != nil {
+		t.Errorf("ledger should be empty after 413, got %+v", op)
+	}
+}
 
 // TestCreateImage_ConcurrentSameSource_SingleFlight fires N concurrent
 // POSTs against the same name+source. All must return 202; only one

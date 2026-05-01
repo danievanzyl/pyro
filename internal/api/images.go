@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/danievanzyl/pyro/internal/sandbox"
+	"github.com/danievanzyl/pyro/internal/sandbox/imageops"
 	"github.com/danievanzyl/pyro/internal/sandbox/imagestate"
 	"github.com/go-chi/chi/v5"
 )
@@ -106,6 +107,15 @@ func handleCreateImage(imgMgr *sandbox.ImageManager) http.HandlerFunc {
 				if errors.Is(err, imagestate.ErrSourceConflict) {
 					writeJSON(w, http.StatusConflict, map[string]string{
 						"error": err.Error() + " — wait for completion or use force",
+					})
+					return
+				}
+				var tooLarge *imageops.ImageTooLargeError
+				if errors.As(err, &tooLarge) {
+					writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
+						"error":        "image too large",
+						"limit_mb":     tooLarge.LimitMB,
+						"estimated_mb": tooLarge.EstimatedMB,
 					})
 					return
 				}

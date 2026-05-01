@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http/httptest"
@@ -277,6 +279,92 @@ func TestProgressReader_NoEmitWithoutBytes(t *testing.T) {
 	pr.flushFinal()
 	if called != 1 {
 		t.Errorf("flushFinal should fire once; called=%d", called)
+	}
+}
+
+// TestCreateFromRegistry_SizeCapRejects pushes a ~3 MiB layer image,
+// then sets MaxImageSizeMB=1 and verifies CreateFromRegistry returns
+// ErrImageTooLarge synchronously without creating any ledger entry or
+// on-disk image directory.
+func TestCreateFromRegistry_SizeCapRejects(t *testing.T) {
+	srv := httptest.NewServer(ggcrregistry.New())
+	defer srv.Close()
+	host, err := hostOf(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Random bytes resist gzip compression, so manifest layer size
+	// stays close to 3 MiB. A bytes.Repeat payload would compress to
+	// kilobytes and slip past the cap.
+	payload := make([]byte, 3<<20)
+	if _, err := cryptorand.Read(payload); err != nil {
+		t.Fatal(err)
+	}
+	tarBytes := buildTar(t, "marker", payload)
+	ref := pushLayerImage(t, host, "test/toolarge", "v1", tarBytes)
+
+	imagesDir := t.TempDir()
+	im, err := NewImageManager(ImageConfig{
+		ImagesDir:      imagesDir,
+		MaxImageSizeMB: 1, // tiny cap forces rejection
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = im.CreateFromRegistry(context.Background(), "toolarge", ref, nil)
+	if err == nil {
+		t.Fatal("expected ErrImageTooLarge, got nil")
+	}
+	var tooLarge *imageops.ImageTooLargeError
+	if !errors.As(err, &tooLarge) {
+		t.Fatalf("expected *ImageTooLargeError, got %T: %v", err, err)
+	}
+	if tooLarge.LimitMB != 1 {
+		t.Errorf("limit = %d want 1", tooLarge.LimitMB)
+	}
+	if tooLarge.EstimatedMB <= 0 {
+		t.Errorf("estimated should be > 0, got %d", tooLarge.EstimatedMB)
+	}
+
+	// No ledger entry, no directory.
+	if op := im.Ledger().Get("toolarge"); op != nil {
+		t.Errorf("ledger should be empty after size-cap reject, got %+v", op)
+	}
+	if _, err := os.Stat(imagesDir + "/toolarge"); !os.IsNotExist(err) {
+		t.Errorf("image dir should not exist after size-cap reject (err=%v)", err)
+	}
+}
+
+// TestCreateFromRegistry_UnderCapAccepts confirms a small image under
+// the cap proceeds past the size check (reaches Begin and starts the
+// async pull goroutine).
+func TestCreateFromRegistry_UnderCapAccepts(t *testing.T) {
+	srv := httptest.NewServer(ggcrregistry.New())
+	defer srv.Close()
+	host, err := hostOf(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tarBytes := buildTar(t, "tiny", []byte("ok"))
+	ref := pushLayerImage(t, host, "test/undercap", "v1", tarBytes)
+
+	im, err := NewImageManager(ImageConfig{
+		ImagesDir:      t.TempDir(),
+		MaxImageSizeMB: 4096,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := im.CreateFromRegistry(context.Background(), "undercap", ref, nil)
+	if err != nil {
+		t.Fatalf("expected pulling response, got err=%v", err)
+	}
+	if info.Status != imagestate.StatusPulling {
+		t.Errorf("status = %s want pulling", info.Status)
 	}
 }
 

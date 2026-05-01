@@ -53,6 +53,11 @@ const (
 // Complete; the sidecar is the source of truth for ready images).
 const imageMetaName = "image-meta.json"
 
+// defaultMaxImageSizeMB is the default per-image disk cap. Covers slim
+// Python/Node and nvidia/cuda:*-runtime; rejects full nvidia/cuda:*-devel
+// which is typically inappropriate as a sandbox base.
+const defaultMaxImageSizeMB = 4096
+
 // ImageConfig configures image management.
 type ImageConfig struct {
 	// ImagesDir is the base directory for all images.
@@ -61,6 +66,12 @@ type ImageConfig struct {
 	// AgentBinaryPath is the path to the compiled pyro-agent binary.
 	// It gets injected into new rootfs images at /usr/bin/pyro-agent.
 	AgentBinaryPath string
+
+	// MaxImageSizeMB caps the estimated decompressed rootfs size for
+	// registry pulls. Σ(layer_size) × 1.3 must not exceed this. Zero
+	// applies defaultMaxImageSizeMB; explicit -1 disables (operators
+	// who want to opt out can set MaxImageSizeMB=-1).
+	MaxImageSizeMB int
 }
 
 // ImageManager handles base image lifecycle.
@@ -414,6 +425,23 @@ func (im *ImageManager) tarToExt4(ctx context.Context, tarPath, ext4Path string)
 func (im *ImageManager) CreateFromRegistry(ctx context.Context, name, source string, puller *registry.Puller) (*ImageInfo, error) {
 	if puller == nil {
 		puller = registry.New()
+	}
+
+	// Size-cap check happens BEFORE Begin so a too-large image creates
+	// no ledger entry, no directory, no goroutine. Failure surfaces
+	// synchronously to the API handler as 413.
+	cap := im.cfg.MaxImageSizeMB
+	if cap == 0 {
+		cap = defaultMaxImageSizeMB
+	}
+	if cap > 0 {
+		sizes, err := puller.LayerSizes(ctx, source)
+		if err != nil {
+			return nil, fmt.Errorf("resolve manifest for size check: %w", err)
+		}
+		if err := imageops.CheckSizeBudget(sizes, cap); err != nil {
+			return nil, err
+		}
 	}
 
 	op, attached := im.ledger.Begin(name, source)

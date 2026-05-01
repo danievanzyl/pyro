@@ -129,6 +129,24 @@ func (p *Puller) Resolve(ctx context.Context, ref string) (*Manifest, error) {
 	}, nil
 }
 
+// LayerSizes resolves the manifest for ref and returns each layer's
+// compressed size in bytes. Used by the size-cap check before any layer
+// bytes are downloaded.
+//
+// Equivalent cost to Resolve — the registry returns layer sizes inside
+// the manifest itself, no separate per-layer HEAD needed.
+func (p *Puller) LayerSizes(ctx context.Context, ref string) ([]int64, error) {
+	m, err := p.Resolve(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	sizes := make([]int64, 0, len(m.Layers))
+	for _, l := range m.Layers {
+		sizes = append(sizes, l.Size)
+	}
+	return sizes, nil
+}
+
 // imageForDescriptor unwraps an index to its linux/amd64 child, or returns the
 // single-arch image directly.
 func (p *Puller) imageForDescriptor(ctx context.Context, ref name.Reference, desc *remote.Descriptor) (v1.Image, error) {
