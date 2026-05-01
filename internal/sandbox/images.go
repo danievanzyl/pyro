@@ -108,13 +108,15 @@ type ImageInfo struct {
 	RootfsPath string            `json:"rootfs_path,omitzero"`
 	KernelPath string            `json:"kernel_path,omitzero"`
 	Size       int64             `json:"size,omitzero"` // rootfs size in bytes
+	Labels     map[string]string `json:"labels,omitzero"`
 	CreatedAt  time.Time         `json:"created_at,omitzero"`
 }
 
 // imageMeta is the disk sidecar for a ready image.
 type imageMeta struct {
-	Digest string `json:"digest,omitzero"`
-	Source string `json:"source,omitzero"`
+	Digest string            `json:"digest,omitzero"`
+	Source string            `json:"source,omitzero"`
+	Labels map[string]string `json:"labels,omitzero"`
 }
 
 // NewImageManager creates an image manager.
@@ -251,6 +253,7 @@ func (im *ImageManager) Get(name string) (*ImageInfo, error) {
 	if meta, err := readImageMeta(filepath.Join(dir, imageMetaName)); err == nil && meta != nil {
 		info.Digest = meta.Digest
 		info.Source = meta.Source
+		info.Labels = meta.Labels
 	}
 	return info, nil
 }
@@ -364,6 +367,18 @@ func (im *ImageManager) CreateFromDockerfile(ctx context.Context, name, dockerfi
 	} else if err := im.writeImageConfigToRootfs(ctx, rootfs, imgCfg); err != nil {
 		os.RemoveAll(dir)
 		return nil, fmt.Errorf("write image config: %w", err)
+	}
+
+	// Persist labels sidecar for parity with the registry-pull path.
+	// Best-effort: a docker-inspect failure here does not fail the build.
+	labels, err := dockerInspectLabels(ctx, dockerTag)
+	if err != nil {
+		im.log.Warn("could not extract image labels via docker inspect", "err", err)
+	}
+	if err := writeImageMeta(filepath.Join(dir, imageMetaName), imageMeta{
+		Labels: labels,
+	}); err != nil {
+		im.log.Warn("could not write image meta sidecar", "err", err)
 	}
 
 	// Copy the default kernel (images share the same kernel for now).
@@ -560,11 +575,12 @@ func (im *ImageManager) runRegistryPull(ctx context.Context, name, source string
 		im.log.Warn("could not copy default kernel", "err", err)
 	}
 
-	// Persist source + digest sidecar so GET surfaces them once the
-	// ledger entry drops.
+	// Persist source + digest + labels sidecar so GET surfaces them once
+	// the ledger entry drops.
 	if err := writeImageMeta(filepath.Join(dir, imageMetaName), imageMeta{
 		Digest: manifest.Digest,
 		Source: source,
+		Labels: registry.ExtractLabels(manifest),
 	}); err != nil {
 		fail(fmt.Errorf("write image meta: %w", err))
 		return
@@ -703,6 +719,26 @@ func dockerInspectConfig(ctx context.Context, target string) (imageconfig.ImageC
 		WorkDir: raw.WorkingDir,
 		User:    raw.User,
 	}, nil
+}
+
+// dockerInspectLabels pulls Config.Labels out of `docker inspect`. Used
+// by the Dockerfile flow for parity with the registry pull's label
+// surfacing on GET /images/{name}. Returns nil on absent or empty.
+func dockerInspectLabels(ctx context.Context, target string) (map[string]string, error) {
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "--format={{json .Config}}", target).Output()
+	if err != nil {
+		return nil, fmt.Errorf("docker inspect: %w", err)
+	}
+	var raw struct {
+		Labels map[string]string `json:"Labels"`
+	}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return nil, fmt.Errorf("parse docker inspect output: %w", err)
+	}
+	if len(raw.Labels) == 0 {
+		return nil, nil
+	}
+	return raw.Labels, nil
 }
 
 // writeImageConfigToRootfs mounts ext4Path and writes the image config file.
