@@ -74,12 +74,20 @@ type ImageConfig struct {
 	MaxImageSizeMB int
 }
 
+// PoolInvalidator drops warm snapshots tied to an image. The snapshot
+// pool implements this. Decoupled via interface so the image manager
+// can be tested without spinning up a real pool.
+type PoolInvalidator interface {
+	Invalidate(image string)
+}
+
 // ImageManager handles base image lifecycle.
 type ImageManager struct {
-	cfg     ImageConfig
-	log     *slog.Logger
-	ledger  *imagestate.Ledger
-	emitter imagestate.Emitter
+	cfg         ImageConfig
+	log         *slog.Logger
+	ledger      *imagestate.Ledger
+	emitter     imagestate.Emitter
+	invalidator PoolInvalidator
 }
 
 // SetEmitter wires an event emitter for image lifecycle SSE events.
@@ -92,6 +100,13 @@ func (im *ImageManager) SetEmitter(e imagestate.Emitter) {
 	}
 	im.emitter = e
 	im.ledger.SetEmitter(e)
+}
+
+// SetInvalidator installs the snapshot-pool invalidator used by
+// force-replace pulls. nil disables invalidation (force pulls still
+// swap the rootfs but warm snapshots survive — only safe in tests).
+func (im *ImageManager) SetInvalidator(p PoolInvalidator) {
+	im.invalidator = p
 }
 
 // ImageInfo describes a stored base image.
@@ -428,18 +443,46 @@ func (im *ImageManager) tarToExt4(ctx context.Context, tarPath, ext4Path string)
 }
 
 // CreateFromRegistry registers an image pull from a remote OCI registry.
-// Asynchronous: returns immediately with status=pulling. The pull and
-// extraction proceed in a background goroutine that drives the ledger
-// through pulling → extracting → ready (or failed). Callers poll
-// ImageManager.Status(name) or the ledger to observe progress.
 //
-// On failure the partial image directory is removed and the ledger
-// records the error. The failed entry stays queryable for ~1h.
+// Behavior depends on force and existing state:
+//   - name absent → start async pull, return pulling info (handler 202).
+//   - name present + ready on disk + !force → idempotent no-op, return
+//     existing ImageInfo with Status=ready (handler 200). No pull,
+//     no ledger touch.
+//   - name present + force → invalidate warm snapshots, start a fresh
+//     pull, atomically swap the on-disk rootfs when extraction
+//     completes (handler 202).
+//   - in-flight pull (pulling/extracting) + force → ErrForceDuringPull
+//     (handler 409). User must wait for the in-flight pull to settle.
+//
+// The async pull drives the ledger through pulling → extracting →
+// ready (or failed) in a background goroutine. Callers poll
+// ImageManager.Status(name) or subscribe to the SSE stream.
+//
+// On failure: non-force removes the partial image directory; force
+// removes only the staged .new files so the prior ready image stays
+// intact. The ledger records the error and the failed entry stays
+// queryable for ~1h.
 //
 // puller may be nil; in that case a default Puller is created.
-func (im *ImageManager) CreateFromRegistry(ctx context.Context, name, source string, puller *registry.Puller) (*ImageInfo, error) {
+func (im *ImageManager) CreateFromRegistry(ctx context.Context, name, source string, force bool, puller *registry.Puller) (*ImageInfo, error) {
 	if puller == nil {
 		puller = registry.New()
+	}
+
+	// Idempotency: existing ready image + !force → no pull.
+	if !force {
+		if existing, err := im.Get(name); err == nil && existing != nil {
+			return existing, nil
+		}
+	} else {
+		// Reject force during in-flight pull. The check is best-effort
+		// (a concurrent Begin between here and our Begin below is
+		// vanishingly unlikely but still gated by the ledger's mutex).
+		if op := im.ledger.Get(name); op != nil &&
+			(op.Status == imagestate.StatusPulling || op.Status == imagestate.StatusExtracting) {
+			return nil, fmt.Errorf("%w: in-flight %s", imagestate.ErrForceDuringPull, op.Status)
+		}
 	}
 
 	// Size-cap check happens BEFORE Begin so a too-large image creates
@@ -456,6 +499,20 @@ func (im *ImageManager) CreateFromRegistry(ctx context.Context, name, source str
 		}
 		if err := imageops.CheckSizeBudget(sizes, cap); err != nil {
 			return nil, err
+		}
+	}
+
+	// For force on an existing image, capture the prior digest for the
+	// audit event and drop warm snapshots before any pull state mutates.
+	// Snapshots reference the old rootfs's blocks; they must die before
+	// the new rootfs takes their place.
+	var oldDigest string
+	if force {
+		if existing, err := im.Get(name); err == nil && existing != nil {
+			oldDigest = existing.Digest
+		}
+		if im.invalidator != nil {
+			im.invalidator.Invalidate(name)
 		}
 	}
 
@@ -478,7 +535,7 @@ func (im *ImageManager) CreateFromRegistry(ctx context.Context, name, source str
 
 	// Detach from the request context — the request returns immediately
 	// but the pull must outlive it.
-	go im.runRegistryPull(context.Background(), name, source, puller)
+	go im.runRegistryPull(context.Background(), name, source, force, oldDigest, puller)
 
 	return &ImageInfo{
 		Name:   op.Name,
@@ -487,13 +544,31 @@ func (im *ImageManager) CreateFromRegistry(ctx context.Context, name, source str
 	}, nil
 }
 
-func (im *ImageManager) runRegistryPull(ctx context.Context, name, source string, puller *registry.Puller) {
+func (im *ImageManager) runRegistryPull(ctx context.Context, name, source string, force bool, oldDigest string, puller *registry.Puller) {
 	dir := filepath.Join(im.cfg.ImagesDir, name)
 	rootfs := filepath.Join(dir, "rootfs.ext4")
+	metaPath := filepath.Join(dir, imageMetaName)
+
+	// Force pulls stage to .new sidecars and rename atomically on
+	// success. A failure mid-extraction leaves the prior ready image
+	// untouched.
+	targetRootfs := rootfs
+	targetMeta := metaPath
+	if force {
+		targetRootfs = rootfs + ".new"
+		targetMeta = metaPath + ".new"
+	}
 
 	fail := func(err error) {
-		im.log.Warn("image pull failed", "name", name, "source", source, "err", err)
-		os.RemoveAll(dir)
+		im.log.Warn("image pull failed", "name", name, "source", source, "force", force, "err", err)
+		if force {
+			// Keep the prior ready image intact; only nuke the staged files.
+			_ = os.Remove(targetRootfs)
+			_ = os.Remove(targetMeta)
+			_ = os.RemoveAll(targetRootfs + ".mount")
+		} else {
+			_ = os.RemoveAll(dir)
+		}
 		_ = im.ledger.Fail(name, err)
 	}
 
@@ -521,7 +596,7 @@ func (im *ImageManager) runRegistryPull(ctx context.Context, name, source string
 	sizeMB := int(totalBytes/(1<<20)*13/10) + 64
 
 	builder := imageops.NewExt4Builder()
-	mount, err := builder.Create(ctx, rootfs, sizeMB)
+	mount, err := builder.Create(ctx, targetRootfs, sizeMB)
 	if err != nil {
 		fail(fmt.Errorf("create ext4: %w", err))
 		return
@@ -576,14 +651,32 @@ func (im *ImageManager) runRegistryPull(ctx context.Context, name, source string
 	}
 
 	// Persist source + digest + labels sidecar so GET surfaces them once
-	// the ledger entry drops.
-	if err := writeImageMeta(filepath.Join(dir, imageMetaName), imageMeta{
+	// the ledger entry drops. Force pulls write to .new and rename
+	// alongside the rootfs swap below.
+	if err := writeImageMeta(targetMeta, imageMeta{
 		Digest: manifest.Digest,
 		Source: source,
 		Labels: registry.ExtractLabels(manifest),
 	}); err != nil {
 		fail(fmt.Errorf("write image meta: %w", err))
 		return
+	}
+
+	// Atomic swap: rename the staged files over the prior ones. After
+	// this point the new rootfs is live; running sandboxes booted from
+	// the old rootfs are unaffected because manager.CreateSandbox
+	// already copied the file at sandbox creation time.
+	if force {
+		if err := os.Rename(targetRootfs, rootfs); err != nil {
+			fail(fmt.Errorf("swap rootfs: %w", err))
+			return
+		}
+		if err := os.Rename(targetMeta, metaPath); err != nil {
+			// Rootfs is already swapped; sidecar replace failed. The
+			// rootfs is the primary artifact — log and continue.
+			im.log.Warn("force replace: meta rename failed (rootfs still swapped)",
+				"name", name, "err", err)
+		}
 	}
 
 	// Capture final rootfs size for the image.ready event payload.
@@ -597,8 +690,20 @@ func (im *ImageManager) runRegistryPull(ctx context.Context, name, source string
 		// keep it and surface the inconsistency in the log.
 		im.log.Warn("ledger complete failed", "name", name, "err", err)
 	}
+
+	// Force-replace audit event — emitted after ready so dashboards see
+	// the natural "ready then replaced" sequence. Distinct from
+	// image.ready so the audit timeline stays separable.
+	if force && im.emitter != nil {
+		im.emitter.Publish(imagestate.EventForceReplaced, map[string]any{
+			"name":       name,
+			"old_digest": oldDigest,
+			"new_digest": manifest.Digest,
+		})
+	}
+
 	im.log.Info("image registered from registry",
-		"name", name, "digest", manifest.Digest, "rootfs", rootfs)
+		"name", name, "digest", manifest.Digest, "rootfs", rootfs, "force", force)
 }
 
 // extractLayer pulls a single layer over the wire (compressed), meters

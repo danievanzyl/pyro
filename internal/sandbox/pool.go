@@ -99,6 +99,33 @@ func (p *Pool) Claim(image, kernelPath string) *snapshot {
 	return nil
 }
 
+// Invalidate drains the ready slice for image and removes the
+// corresponding snapshot dirs from disk. The replenishment loop refills
+// at its own cadence. Idempotent — safe for unknown image names and
+// repeat calls.
+//
+// Used by force-replace pulls (slice 06): warm snapshots reference the
+// old rootfs's blocks, so reusing them after the rootfs is swapped
+// would corrupt new sandboxes. Running sandboxes already hold their
+// own copy from manager.CreateSandbox and are unaffected.
+func (p *Pool) Invalidate(image string) {
+	p.mu.Lock()
+	snaps := p.ready[image]
+	delete(p.ready, image)
+	p.mu.Unlock()
+
+	for _, s := range snaps {
+		dir := filepath.Join(p.cfg.SnapshotDir, s.ID)
+		if err := os.RemoveAll(dir); err != nil {
+			p.log.Warn("invalidate: remove snapshot dir failed",
+				"image", image, "snap_id", s.ID, "err", err)
+		}
+	}
+	if len(snaps) > 0 {
+		p.log.Info("pool invalidated", "image", image, "removed", len(snaps))
+	}
+}
+
 // Available returns the number of ready snapshots for an image.
 func (p *Pool) Available(image string) int {
 	p.mu.Lock()

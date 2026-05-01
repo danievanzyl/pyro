@@ -25,14 +25,15 @@ const (
 )
 
 // Event type names emitted on ledger transitions. The orchestrator emits
-// EventLayerProgress directly (it's a per-layer side effect, not a
-// ledger transition).
+// EventLayerProgress and EventForceReplaced directly (per-layer / audit
+// side effects, not ledger transitions).
 const (
-	EventPulling       = "image.pulling"
-	EventLayerProgress = "image.layer_progress"
-	EventExtracting    = "image.extracting"
-	EventReady         = "image.ready"
-	EventFailed        = "image.failed"
+	EventPulling        = "image.pulling"
+	EventLayerProgress  = "image.layer_progress"
+	EventExtracting     = "image.extracting"
+	EventReady          = "image.ready"
+	EventFailed         = "image.failed"
+	EventForceReplaced  = "image.force_replaced"
 )
 
 // ErrInvalidTransition signals a forbidden status change.
@@ -40,6 +41,12 @@ var ErrInvalidTransition = errors.New("invalid status transition")
 
 // ErrUnknown signals the ledger has no entry for a name.
 var ErrUnknown = errors.New("no ledger entry for name")
+
+// ErrForceDuringPull signals a force-replace attempt while a pull is
+// already in flight (pulling/extracting). The orchestrator surfaces
+// this as 409. Callers must wait for the in-flight pull to settle
+// before forcing a replacement.
+var ErrForceDuringPull = errors.New("can't force during active pull")
 
 // ErrSourceConflict signals that a Begin attached to an in-flight pull
 // whose source differs from the requested source. The orchestrator

@@ -72,6 +72,10 @@ type CreateImageRequest struct {
 	Name       string `json:"name"`
 	Dockerfile string `json:"dockerfile,omitempty"` // path to Dockerfile on the host
 	Source     string `json:"source,omitempty"`     // OCI image reference, e.g. "python:3.12"
+	// Force triggers a fresh pull and atomic replacement when the name
+	// already exists. Without it, registering a name that's already
+	// present is an idempotent no-op (returns the existing image).
+	Force bool `json:"force,omitempty"`
 }
 
 func handleCreateImage(imgMgr *sandbox.ImageManager) http.HandlerFunc {
@@ -99,14 +103,22 @@ func handleCreateImage(imgMgr *sandbox.ImageManager) http.HandlerFunc {
 		}
 
 		if hasSource {
-			// Async: returns immediately with status=pulling.
-			// ErrSourceConflict → 409 (concurrent caller with a different
-			// source for the same name). Anything else → 500.
-			info, err := imgMgr.CreateFromRegistry(r.Context(), req.Name, req.Source, nil)
+			// Async: returns immediately with status=pulling, OR returns
+			// the existing image (no pull) for the idempotent path.
+			// ErrSourceConflict → 409 (concurrent caller with different
+			// source). ErrForceDuringPull → 409 (force while another pull
+			// is in flight). Size cap → 413. Anything else → 500.
+			info, err := imgMgr.CreateFromRegistry(r.Context(), req.Name, req.Source, req.Force, nil)
 			if err != nil {
 				if errors.Is(err, imagestate.ErrSourceConflict) {
 					writeJSON(w, http.StatusConflict, map[string]string{
 						"error": err.Error() + " — wait for completion or use force",
+					})
+					return
+				}
+				if errors.Is(err, imagestate.ErrForceDuringPull) {
+					writeJSON(w, http.StatusConflict, map[string]string{
+						"error": err.Error(),
 					})
 					return
 				}
@@ -122,7 +134,12 @@ func handleCreateImage(imgMgr *sandbox.ImageManager) http.HandlerFunc {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "register failed: " + err.Error()})
 				return
 			}
-			writeJSON(w, http.StatusAccepted, info)
+			// Idempotent existing → 200; freshly started pull → 202.
+			if info.Status == imagestate.StatusReady {
+				writeJSON(w, http.StatusOK, info)
+			} else {
+				writeJSON(w, http.StatusAccepted, info)
+			}
 			return
 		}
 

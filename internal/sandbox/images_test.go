@@ -313,7 +313,7 @@ func TestCreateFromRegistry_SizeCapRejects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = im.CreateFromRegistry(context.Background(), "toolarge", ref, nil)
+	_, err = im.CreateFromRegistry(context.Background(), "toolarge", ref, false, nil)
 	if err == nil {
 		t.Fatal("expected ErrImageTooLarge, got nil")
 	}
@@ -359,12 +359,150 @@ func TestCreateFromRegistry_UnderCapAccepts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	info, err := im.CreateFromRegistry(context.Background(), "undercap", ref, nil)
+	info, err := im.CreateFromRegistry(context.Background(), "undercap", ref, false, nil)
 	if err != nil {
 		t.Fatalf("expected pulling response, got err=%v", err)
 	}
 	if info.Status != imagestate.StatusPulling {
 		t.Errorf("status = %s want pulling", info.Status)
+	}
+}
+
+// fakeInvalidator records Invalidate calls for verification.
+type fakeInvalidator struct {
+	mu      sync.Mutex
+	invoked []string
+}
+
+func (f *fakeInvalidator) Invalidate(image string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.invoked = append(f.invoked, image)
+}
+
+func (f *fakeInvalidator) calls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.invoked))
+	copy(out, f.invoked)
+	return out
+}
+
+// stageReadyImage writes a minimal on-disk image (rootfs.ext4 +
+// vmlinux + image-meta.json) so Get() returns a ready ImageInfo without
+// running the pull goroutine. Returns the digest stamped in the meta.
+func stageReadyImage(t *testing.T, imagesDir, name, digest, source string) {
+	t.Helper()
+	dir := imagesDir + "/" + name
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/rootfs.ext4", []byte("rootfs"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/vmlinux", []byte("kernel"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	meta := []byte(`{"digest":"` + digest + `","source":"` + source + `"}`)
+	if err := os.WriteFile(dir+"/"+imageMetaName, meta, 0o640); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCreateFromRegistry_NoForce_ReturnsExistingNoPull stages a ready
+// image on disk, calls CreateFromRegistry without force, and verifies
+// the existing image is returned without starting a goroutine or
+// touching the ledger.
+func TestCreateFromRegistry_NoForce_ReturnsExistingNoPull(t *testing.T) {
+	imagesDir := t.TempDir()
+	stageReadyImage(t, imagesDir, "py312", "sha256:old", "python:3.12")
+
+	im, err := NewImageManager(ImageConfig{
+		ImagesDir:      imagesDir,
+		MaxImageSizeMB: -1,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := im.CreateFromRegistry(context.Background(), "py312", "python:3.12", false, nil)
+	if err != nil {
+		t.Fatalf("expected idempotent success, got err=%v", err)
+	}
+	if info.Status != imagestate.StatusReady {
+		t.Errorf("status = %s want ready", info.Status)
+	}
+	if info.Digest != "sha256:old" {
+		t.Errorf("digest = %s want sha256:old", info.Digest)
+	}
+	// No ledger entry — idempotent path skips Begin entirely.
+	if op := im.Ledger().Get("py312"); op != nil {
+		t.Errorf("ledger should be empty on idempotent path; got %+v", op)
+	}
+}
+
+// TestCreateFromRegistry_ForceDuringInFlight_409 seeds an in-flight
+// pull and verifies a force-replace request returns ErrForceDuringPull
+// without invalidating the pool.
+func TestCreateFromRegistry_ForceDuringInFlight_409(t *testing.T) {
+	im, err := NewImageManager(ImageConfig{
+		ImagesDir:      t.TempDir(),
+		MaxImageSizeMB: -1,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv := &fakeInvalidator{}
+	im.SetInvalidator(inv)
+
+	// Seed an in-flight pull.
+	im.Ledger().Begin("py312", "python:3.12")
+
+	_, err = im.CreateFromRegistry(context.Background(), "py312", "python:3.12", true, nil)
+	if !errors.Is(err, imagestate.ErrForceDuringPull) {
+		t.Fatalf("expected ErrForceDuringPull, got %v", err)
+	}
+	// Pool must not have been touched — the in-flight pull will become
+	// ready and own those snapshots.
+	if got := inv.calls(); len(got) != 0 {
+		t.Errorf("invalidator should not be called when force is rejected; got %v", got)
+	}
+}
+
+// TestCreateFromRegistry_ForceInvalidatesPool stages a ready image,
+// requests force=true, and verifies the invalidator was called with
+// the image name BEFORE the pull goroutine starts. The puller is left
+// nil so the actual pull will race-fail against the unreachable
+// "no:such" source — that's irrelevant; we only assert the
+// pre-goroutine pool drop.
+func TestCreateFromRegistry_ForceInvalidatesPool(t *testing.T) {
+	imagesDir := t.TempDir()
+	stageReadyImage(t, imagesDir, "py312", "sha256:old", "python:3.12")
+
+	im, err := NewImageManager(ImageConfig{
+		ImagesDir:      imagesDir,
+		MaxImageSizeMB: -1, // disable cap so LayerSizes is skipped
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv := &fakeInvalidator{}
+	im.SetInvalidator(inv)
+
+	// Cap is -1 so LayerSizes is skipped → returns synchronously after
+	// Begin spawns the goroutine. Goroutine will fail in Resolve but
+	// that's after the synchronous return.
+	info, err := im.CreateFromRegistry(context.Background(), "py312", "127.0.0.1:1/no:such", true, nil)
+	if err != nil {
+		t.Fatalf("expected synchronous pulling response, got err=%v", err)
+	}
+	if info.Status != imagestate.StatusPulling {
+		t.Errorf("status = %s want pulling", info.Status)
+	}
+
+	got := inv.calls()
+	if len(got) != 1 || got[0] != "py312" {
+		t.Errorf("invalidator calls = %v want [py312]", got)
 	}
 }
 

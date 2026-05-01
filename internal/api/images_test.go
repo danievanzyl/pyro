@@ -349,6 +349,79 @@ drain:
 	}
 }
 
+// TestCreateImage_NoForce_ExistingReturns200 stages a ready image on
+// disk and verifies POST /images for the same name without force is
+// an idempotent no-op (200 + the existing ImageInfo, no goroutine).
+func TestCreateImage_NoForce_ExistingReturns200(t *testing.T) {
+	dir := t.TempDir()
+	// Stage rootfs + kernel + meta sidecar so Get() returns ready.
+	imgDir := dir + "/py312"
+	if err := os.MkdirAll(imgDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for _, kv := range []struct{ name, body string }{
+		{"rootfs.ext4", "rootfs"},
+		{"vmlinux", "kernel"},
+		{"image-meta.json", `{"digest":"sha256:old","source":"python:3.12"}`},
+	} {
+		if err := os.WriteFile(imgDir+"/"+kv.name, []byte(kv.body), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	im, err := sandbox.NewImageManager(sandbox.ImageConfig{
+		ImagesDir:      dir,
+		MaxImageSizeMB: -1,
+	}, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := chi.NewRouter()
+	SetupImageRoutes(r, im)
+
+	w := postImage(t, r, map[string]any{
+		"name":   "py312",
+		"source": "python:3.12",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d want 200; body=%s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if body["status"] != "ready" {
+		t.Errorf("status = %v want ready", body["status"])
+	}
+	if body["digest"] != "sha256:old" {
+		t.Errorf("digest = %v want sha256:old", body["digest"])
+	}
+	// No ledger entry — idempotent path skipped Begin.
+	if op := im.Ledger().Get("py312"); op != nil {
+		t.Errorf("ledger should be empty after idempotent 200; got %+v", op)
+	}
+}
+
+// TestCreateImage_Force_DuringPull_Returns409 seeds an in-flight pull
+// and verifies a force-replace POST returns 409 with the
+// ErrForceDuringPull message surfaced.
+func TestCreateImage_Force_DuringPull_Returns409(t *testing.T) {
+	r, im := newImageRouterWithManager(t)
+	im.Ledger().Begin("py312", "python:3.12")
+
+	w := postImage(t, r, map[string]any{
+		"name":   "py312",
+		"source": "python:3.12",
+		"force":  true,
+	})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d want 409; body=%s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	errStr, _ := body["error"].(string)
+	if errStr == "" {
+		t.Fatalf("expected non-empty error; body=%s", w.Body.String())
+	}
+}
+
 // TestCreateImage_SourceMismatchReturns409 verifies that a second POST
 // for the same name with a *different* source while the first is still
 // in flight returns 409. We seed the ledger directly (no goroutine) so
