@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 
 @dataclass
@@ -52,3 +53,46 @@ class SandboxInfo:
             vcpu=data.get("vcpu", 1),
             mem_mib=data.get("mem_mib", 256),
         )
+
+
+@dataclass
+class ImageInfo:
+    """Image metadata from the Pyro images API.
+
+    Mirrors `internal/sandbox.ImageInfo`. Most fields are `omitzero` on the
+    server, so dataclass defaults stay empty for in-flight or legacy entries.
+    """
+
+    name: str
+    status: str = ""
+    source: str = ""
+    digest: str = ""
+    error: str = ""
+    rootfs_path: str = ""
+    kernel_path: str = ""
+    size: int = 0
+    labels: dict[str, str] = field(default_factory=dict)
+    created_at: str = ""
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ImageInfo:
+        return cls(
+            name=data.get("name", ""),
+            status=data.get("status", ""),
+            source=data.get("source", ""),
+            digest=data.get("digest", ""),
+            error=data.get("error", ""),
+            rootfs_path=data.get("rootfs_path", ""),
+            kernel_path=data.get("kernel_path", ""),
+            size=data.get("size", 0),
+            labels=dict(data.get("labels") or {}),
+            created_at=data.get("created_at", ""),
+        )
+
+    @property
+    def is_ready(self) -> bool:
+        return self.status == "ready"
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in ("ready", "failed")

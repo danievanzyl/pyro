@@ -53,3 +53,38 @@ Read a file from the sandbox. Returns `bytes`.
 
 ### `sandbox.stop()`
 Destroy the sandbox. Called automatically when using `async with`.
+
+## Images
+
+Register a base image once (idempotent), then boot sandboxes from it:
+
+```python
+import asyncio
+from pyro_sdk import Pyro
+
+async def main():
+    pyro = Pyro(api_key="pk_...", base_url="http://localhost:8080")
+
+    # Idempotent: pulls if missing, attaches to in-flight pulls,
+    # returns immediately if already ready.
+    img = await pyro.images.ensure(name="py312", source="python:3.12")
+    print(img.name, img.status, img.digest)
+
+    async with await pyro.sandbox.create(image="py312") as sb:
+        result = await sb.run("print('Hello from py312!')")
+        print(result.stdout)
+
+asyncio.run(main())
+```
+
+### `pyro.images.ensure(name=, source=, timeout=)`
+Idempotent register. Same source → no-op. Different source → `ImageConflictError`.
+
+### `pyro.images.create_and_wait(name=, source=, force=, timeout=)`
+Block until the pull settles. Failures raise `ImageRegistrationError`.
+
+### `pyro.images.create(name=, source=, force=)`
+Kick off a pull, return a `PullOperation`. Use `await op.wait(timeout=...)` later.
+
+### `pyro.images.get(name)`
+Return current `ImageInfo`. 404 → `ImageNotFoundError`.
