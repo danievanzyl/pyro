@@ -300,6 +300,25 @@ func TestCreateImage_ConcurrentSameSource_SingleFlight(t *testing.T) {
 	ch := bus.Subscribe()
 	defer bus.Unsubscribe(ch)
 
+	// Hanging registry: the first goroutine's Resolve blocks here for
+	// the duration of the test, keeping the ledger entry in `pulling`.
+	// Concurrent callers must therefore attach (single-flight) instead
+	// of seeing a `failed` entry and re-Begin'ing. A fast-failing source
+	// (e.g. 127.0.0.1:1) makes this test racy under load.
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		select {
+		case <-release:
+		case <-req.Context().Done():
+		}
+	}))
+	// LIFO: close(release) runs first so blocked handlers return,
+	// then srv.Close() can shut down cleanly without deadlock.
+	defer srv.Close()
+	defer close(release)
+	srvURL, _ := url.Parse(srv.URL)
+	source := srvURL.Host + "/concur:v1"
+
 	const N = 8
 	var wg sync.WaitGroup
 	codes := make([]int, N)
@@ -313,7 +332,7 @@ func TestCreateImage_ConcurrentSameSource_SingleFlight(t *testing.T) {
 			<-startBarrier
 			w := postImage(t, r, map[string]string{
 				"name":   "concur",
-				"source": "127.0.0.1:1/no:such",
+				"source": source,
 			})
 			codes[i] = w.Code
 			_ = json.Unmarshal(w.Body.Bytes(), &bodies[i])
