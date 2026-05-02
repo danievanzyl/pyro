@@ -18,6 +18,4 @@ sdk/python/*.egg-info/
 sdk/python/**/__pycache__/
 sdk/typescript/node_modules/
 sdk/typescript/dist/
-ralph/
-.claude/
 network-requests.txt
