@@ -19,16 +19,44 @@ package sandbox
 
 import (
 	"cmp"
+	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"github.com/danievanzyl/pyro/internal/sandbox/imageconfig"
+	"github.com/danievanzyl/pyro/internal/sandbox/imageops"
+	"github.com/danievanzyl/pyro/internal/sandbox/imagestate"
+	"github.com/danievanzyl/pyro/internal/sandbox/registry"
 )
+
+// progressEmitInterval throttles per-layer image.layer_progress events.
+// Emit when either threshold is crossed since the last emit; final
+// emit is always sent at layer end.
+const (
+	progressByteThreshold = 1 << 20 // 1 MiB
+	progressTimeThreshold = 250 * time.Millisecond
+)
+
+// imageMetaName is the on-disk metadata sidecar persisted next to
+// rootfs.ext4. Stores the resolved manifest digest + source so GET can
+// surface them after a successful pull (the ledger entry is dropped on
+// Complete; the sidecar is the source of truth for ready images).
+const imageMetaName = "image-meta.json"
+
+// defaultMaxImageSizeMB is the default per-image disk cap. Covers slim
+// Python/Node and nvidia/cuda:*-runtime; rejects full nvidia/cuda:*-devel
+// which is typically inappropriate as a sandbox base.
+const defaultMaxImageSizeMB = 4096
 
 // ImageConfig configures image management.
 type ImageConfig struct {
@@ -38,21 +66,72 @@ type ImageConfig struct {
 	// AgentBinaryPath is the path to the compiled pyro-agent binary.
 	// It gets injected into new rootfs images at /usr/bin/pyro-agent.
 	AgentBinaryPath string
+
+	// MaxImageSizeMB caps the estimated decompressed rootfs size for
+	// registry pulls. Σ(layer_size) × 1.3 must not exceed this. Zero
+	// applies defaultMaxImageSizeMB; explicit -1 disables (operators
+	// who want to opt out can set MaxImageSizeMB=-1).
+	MaxImageSizeMB int
+}
+
+// PoolInvalidator drops warm snapshots tied to an image. The snapshot
+// pool implements this. Decoupled via interface so the image manager
+// can be tested without spinning up a real pool.
+type PoolInvalidator interface {
+	Invalidate(image string)
 }
 
 // ImageManager handles base image lifecycle.
 type ImageManager struct {
-	cfg ImageConfig
-	log *slog.Logger
+	cfg         ImageConfig
+	log         *slog.Logger
+	ledger      *imagestate.Ledger
+	emitter     imagestate.Emitter
+	invalidator PoolInvalidator
+}
+
+// SetEmitter wires an event emitter for image lifecycle SSE events.
+// The same emitter is installed on the underlying ledger.
+func (im *ImageManager) SetEmitter(e imagestate.Emitter) {
+	if e == nil {
+		im.emitter = nil
+		im.ledger.SetEmitter(nil)
+		return
+	}
+	im.emitter = e
+	im.ledger.SetEmitter(e)
+}
+
+// SetInvalidator installs the snapshot-pool invalidator used by
+// force-replace pulls. nil disables invalidation (force pulls still
+// swap the rootfs but warm snapshots survive — only safe in tests).
+func (im *ImageManager) SetInvalidator(p PoolInvalidator) {
+	im.invalidator = p
 }
 
 // ImageInfo describes a stored base image.
+//
+// `omitzero` JSON tags keep the response payload terse for in-flight or
+// disk-only views (e.g. a pulling entry has no rootfs path; a ready disk
+// image without a meta sidecar has no digest).
 type ImageInfo struct {
-	Name      string    `json:"name"`
-	RootfsPath string   `json:"rootfs_path"`
-	KernelPath string   `json:"kernel_path"`
-	Size      int64     `json:"size"` // rootfs size in bytes
-	CreatedAt time.Time `json:"created_at"`
+	Name       string            `json:"name"`
+	Status     imagestate.Status `json:"status,omitzero"`
+	Source     string            `json:"source,omitzero"`
+	Digest     string            `json:"digest,omitzero"`
+	Error      string            `json:"error,omitzero"`
+	RootfsPath string            `json:"rootfs_path,omitzero"`
+	KernelPath string            `json:"kernel_path,omitzero"`
+	Size       int64             `json:"size,omitzero"` // rootfs size in bytes
+	Labels     map[string]string `json:"labels,omitzero"`
+	CreatedAt  time.Time         `json:"created_at,omitzero"`
+}
+
+// imageMeta is the disk sidecar for a ready image.
+type imageMeta struct {
+	Digest string            `json:"digest,omitzero"`
+	Source string            `json:"source,omitzero"`
+	Labels map[string]string `json:"labels,omitzero"`
 }
 
 // NewImageManager creates an image manager.
@@ -60,8 +139,16 @@ func NewImageManager(cfg ImageConfig, log *slog.Logger) (*ImageManager, error) {
 	if err := os.MkdirAll(cfg.ImagesDir, 0750); err != nil {
 		return nil, fmt.Errorf("create images dir: %w", err)
 	}
-	return &ImageManager{cfg: cfg, log: log}, nil
+	return &ImageManager{
+		cfg:    cfg,
+		log:    log,
+		ledger: imagestate.New(imagestate.RealClock(), imagestate.DefaultFailedTTL),
+	}, nil
 }
+
+// Ledger exposes the in-memory pull ledger so the API layer can surface
+// in-flight and recently-failed pull state.
+func (im *ImageManager) Ledger() *imagestate.Ledger { return im.ledger }
 
 // KernelInfo describes an available guest kernel.
 type KernelInfo struct {
@@ -168,13 +255,62 @@ func (im *ImageManager) Get(name string) (*ImageInfo, error) {
 		kernel = shared
 	}
 
-	return &ImageInfo{
+	info := &ImageInfo{
 		Name:       name,
+		Status:     imagestate.StatusReady,
 		RootfsPath: rootfs,
 		KernelPath: kernel,
 		Size:       rootfsInfo.Size(),
 		CreatedAt:  rootfsInfo.ModTime(),
-	}, nil
+	}
+	// Sidecar is best-effort — pre-existing images registered before the
+	// async pull path won't have one and that's fine.
+	if meta, err := readImageMeta(filepath.Join(dir, imageMetaName)); err == nil && meta != nil {
+		info.Digest = meta.Digest
+		info.Source = meta.Source
+		info.Labels = meta.Labels
+	}
+	return info, nil
+}
+
+// Status returns the live view of an image: ledger entry if one exists
+// (in-flight or recently-failed), otherwise the disk record. Returns nil
+// if the image is unknown to both the ledger and the disk.
+func (im *ImageManager) Status(name string) *ImageInfo {
+	if op := im.ledger.Get(name); op != nil {
+		return &ImageInfo{
+			Name:   op.Name,
+			Status: op.Status,
+			Source: op.Source,
+			Digest: op.Digest,
+			Error:  op.Error,
+		}
+	}
+	info, err := im.Get(name)
+	if err != nil {
+		return nil
+	}
+	return info
+}
+
+func readImageMeta(path string) (*imageMeta, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var m imageMeta
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+func writeImageMeta(path string, m imageMeta) error {
+	b, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, b, 0o644)
 }
 
 // CreateFromDockerfile builds a rootfs from a Dockerfile.
@@ -238,6 +374,28 @@ func (im *ImageManager) CreateFromDockerfile(ctx context.Context, name, dockerfi
 		}
 	}
 
+	// Persist the image's runtime defaults (Env/WorkingDir/User) so the agent
+	// can apply them per exec — parity with the registry-pull path.
+	imgCfg, err := dockerInspectConfig(ctx, dockerTag)
+	if err != nil {
+		im.log.Warn("could not extract image config via docker inspect", "err", err)
+	} else if err := im.writeImageConfigToRootfs(ctx, rootfs, imgCfg); err != nil {
+		os.RemoveAll(dir)
+		return nil, fmt.Errorf("write image config: %w", err)
+	}
+
+	// Persist labels sidecar for parity with the registry-pull path.
+	// Best-effort: a docker-inspect failure here does not fail the build.
+	labels, err := dockerInspectLabels(ctx, dockerTag)
+	if err != nil {
+		im.log.Warn("could not extract image labels via docker inspect", "err", err)
+	}
+	if err := writeImageMeta(filepath.Join(dir, imageMetaName), imageMeta{
+		Labels: labels,
+	}); err != nil {
+		im.log.Warn("could not write image meta sidecar", "err", err)
+	}
+
 	// Copy the default kernel (images share the same kernel for now).
 	defaultKernel := filepath.Join(im.cfg.ImagesDir, "default", "vmlinux")
 	kernel := filepath.Join(dir, "vmlinux")
@@ -282,6 +440,428 @@ func (im *ImageManager) tarToExt4(ctx context.Context, tarPath, ext4Path string)
 	}
 
 	return nil
+}
+
+// CreateFromRegistry registers an image pull from a remote OCI registry.
+//
+// Behavior depends on force and existing state:
+//   - name absent → start async pull, return pulling info (handler 202).
+//   - name present + ready on disk + !force → idempotent no-op, return
+//     existing ImageInfo with Status=ready (handler 200). No pull,
+//     no ledger touch.
+//   - name present + force → invalidate warm snapshots, start a fresh
+//     pull, atomically swap the on-disk rootfs when extraction
+//     completes (handler 202).
+//   - in-flight pull (pulling/extracting) + force → ErrForceDuringPull
+//     (handler 409). User must wait for the in-flight pull to settle.
+//
+// The async pull drives the ledger through pulling → extracting →
+// ready (or failed) in a background goroutine. Callers poll
+// ImageManager.Status(name) or subscribe to the SSE stream.
+//
+// On failure: non-force removes the partial image directory; force
+// removes only the staged .new files so the prior ready image stays
+// intact. The ledger records the error and the failed entry stays
+// queryable for ~1h.
+//
+// puller may be nil; in that case a default Puller is created.
+func (im *ImageManager) CreateFromRegistry(ctx context.Context, name, source string, force bool, puller *registry.Puller) (*ImageInfo, error) {
+	if puller == nil {
+		puller = registry.New()
+	}
+
+	// Idempotency: existing ready image + !force → no pull.
+	if !force {
+		if existing, err := im.Get(name); err == nil && existing != nil {
+			return existing, nil
+		}
+	} else {
+		// Reject force during in-flight pull. The check is best-effort
+		// (a concurrent Begin between here and our Begin below is
+		// vanishingly unlikely but still gated by the ledger's mutex).
+		if op := im.ledger.Get(name); op != nil &&
+			(op.Status == imagestate.StatusPulling || op.Status == imagestate.StatusExtracting) {
+			return nil, fmt.Errorf("%w: in-flight %s", imagestate.ErrForceDuringPull, op.Status)
+		}
+	}
+
+	// Size-cap check happens BEFORE Begin so a too-large image creates
+	// no ledger entry, no directory, no goroutine. Failure surfaces
+	// synchronously to the API handler as 413.
+	cap := im.cfg.MaxImageSizeMB
+	if cap == 0 {
+		cap = defaultMaxImageSizeMB
+	}
+	if cap > 0 {
+		sizes, err := puller.LayerSizes(ctx, source)
+		if err != nil {
+			return nil, fmt.Errorf("resolve manifest for size check: %w", err)
+		}
+		if err := imageops.CheckSizeBudget(sizes, cap); err != nil {
+			return nil, err
+		}
+	}
+
+	// For force on an existing image, capture the prior digest for the
+	// audit event and drop warm snapshots before any pull state mutates.
+	// Snapshots reference the old rootfs's blocks; they must die before
+	// the new rootfs takes their place.
+	var oldDigest string
+	if force {
+		if existing, err := im.Get(name); err == nil && existing != nil {
+			oldDigest = existing.Digest
+		}
+		if im.invalidator != nil {
+			im.invalidator.Invalidate(name)
+		}
+	}
+
+	op, attached := im.ledger.Begin(name, source)
+	if attached {
+		// Single-flight: a concurrent caller arrived during an in-flight
+		// pull. If the source matches, return the same in-flight state;
+		// the puller goroutine continues unchanged. If the source differs,
+		// surface ErrSourceConflict — handler maps to 409.
+		if op.Source != source {
+			return nil, fmt.Errorf("%w: in-flight source %q, requested %q", imagestate.ErrSourceConflict, op.Source, source)
+		}
+		return &ImageInfo{
+			Name:   op.Name,
+			Status: op.Status,
+			Source: op.Source,
+			Digest: op.Digest,
+		}, nil
+	}
+
+	// Detach from the request context — the request returns immediately
+	// but the pull must outlive it.
+	go im.runRegistryPull(context.Background(), name, source, force, oldDigest, puller)
+
+	return &ImageInfo{
+		Name:   op.Name,
+		Status: op.Status,
+		Source: op.Source,
+	}, nil
+}
+
+func (im *ImageManager) runRegistryPull(ctx context.Context, name, source string, force bool, oldDigest string, puller *registry.Puller) {
+	dir := filepath.Join(im.cfg.ImagesDir, name)
+	rootfs := filepath.Join(dir, "rootfs.ext4")
+	metaPath := filepath.Join(dir, imageMetaName)
+
+	// Force pulls stage to .new sidecars and rename atomically on
+	// success. A failure mid-extraction leaves the prior ready image
+	// untouched.
+	targetRootfs := rootfs
+	targetMeta := metaPath
+	if force {
+		targetRootfs = rootfs + ".new"
+		targetMeta = metaPath + ".new"
+	}
+
+	fail := func(err error) {
+		im.log.Warn("image pull failed", "name", name, "source", source, "force", force, "err", err)
+		if force {
+			// Keep the prior ready image intact; only nuke the staged files.
+			_ = os.Remove(targetRootfs)
+			_ = os.Remove(targetMeta)
+			_ = os.RemoveAll(targetRootfs + ".mount")
+		} else {
+			_ = os.RemoveAll(dir)
+		}
+		_ = im.ledger.Fail(name, err)
+	}
+
+	manifest, err := puller.Resolve(ctx, source)
+	if err != nil {
+		fail(fmt.Errorf("resolve %s: %w", source, err))
+		return
+	}
+	_ = im.ledger.SetDigest(name, manifest.Digest)
+
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		fail(fmt.Errorf("create image dir: %w", err))
+		return
+	}
+
+	im.log.Info("pulling image from registry",
+		"name", name, "source", source,
+		"digest", manifest.Digest, "layers", len(manifest.Layers))
+
+	// Estimate size: sum of layer sizes × 1.3 for ext4 overhead, with 64 MiB floor.
+	var totalBytes int64
+	for _, l := range manifest.Layers {
+		totalBytes += l.Size
+	}
+	sizeMB := int(totalBytes/(1<<20)*13/10) + 64
+
+	builder := imageops.NewExt4Builder()
+	mount, err := builder.Create(ctx, targetRootfs, sizeMB)
+	if err != nil {
+		fail(fmt.Errorf("create ext4: %w", err))
+		return
+	}
+
+	// Layer download + tar extraction runs in the pulling phase so the
+	// per-layer progress events all fire before image.extracting (which
+	// represents finalization: agent inject, image-config write, unmount).
+	extractor := imageops.NewLayerExtractor()
+	for _, layer := range manifest.Layers {
+		if err := im.extractLayer(name, layer, manifest, extractor, mount.MountDir); err != nil {
+			mount.Close()
+			fail(err)
+			return
+		}
+	}
+
+	if err := im.ledger.Update(name, imagestate.StatusExtracting); err != nil {
+		mount.Close()
+		fail(fmt.Errorf("ledger transition: %w", err))
+		return
+	}
+
+	// Inject agent while still mounted.
+	if im.cfg.AgentBinaryPath != "" {
+		injector := imageops.NewAgentInjector(im.cfg.AgentBinaryPath)
+		if err := injector.Inject(mount.MountDir); err != nil {
+			mount.Close()
+			fail(fmt.Errorf("inject agent: %w", err))
+			return
+		}
+	}
+
+	// Persist Env/WorkDir/User defaults so the agent can apply them per exec.
+	imgCfg := registry.ExtractConfig(manifest)
+	if err := imageops.WriteImageConfig(mount.MountDir, imgCfg); err != nil {
+		mount.Close()
+		fail(fmt.Errorf("write image config: %w", err))
+		return
+	}
+
+	if err := mount.Close(); err != nil {
+		fail(fmt.Errorf("unmount: %w", err))
+		return
+	}
+
+	// Copy default kernel for parity with CreateFromDockerfile.
+	defaultKernel := filepath.Join(im.cfg.ImagesDir, "default", "vmlinux")
+	kernel := filepath.Join(dir, "vmlinux")
+	if err := copyFile(defaultKernel, kernel); err != nil {
+		im.log.Warn("could not copy default kernel", "err", err)
+	}
+
+	// Persist source + digest + labels sidecar so GET surfaces them once
+	// the ledger entry drops. Force pulls write to .new and rename
+	// alongside the rootfs swap below.
+	if err := writeImageMeta(targetMeta, imageMeta{
+		Digest: manifest.Digest,
+		Source: source,
+		Labels: registry.ExtractLabels(manifest),
+	}); err != nil {
+		fail(fmt.Errorf("write image meta: %w", err))
+		return
+	}
+
+	// Atomic swap: rename the staged files over the prior ones. After
+	// this point the new rootfs is live; running sandboxes booted from
+	// the old rootfs are unaffected because manager.CreateSandbox
+	// already copied the file at sandbox creation time.
+	if force {
+		if err := os.Rename(targetRootfs, rootfs); err != nil {
+			fail(fmt.Errorf("swap rootfs: %w", err))
+			return
+		}
+		if err := os.Rename(targetMeta, metaPath); err != nil {
+			// Rootfs is already swapped; sidecar replace failed. The
+			// rootfs is the primary artifact — log and continue.
+			im.log.Warn("force replace: meta rename failed (rootfs still swapped)",
+				"name", name, "err", err)
+		}
+	}
+
+	// Capture final rootfs size for the image.ready event payload.
+	var rootfsSize int64
+	if st, err := os.Stat(rootfs); err == nil {
+		rootfsSize = st.Size()
+	}
+
+	if err := im.ledger.Complete(name, rootfsSize); err != nil {
+		// Couldn't transition the ledger but the on-disk image is sound;
+		// keep it and surface the inconsistency in the log.
+		im.log.Warn("ledger complete failed", "name", name, "err", err)
+	}
+
+	// Force-replace audit event — emitted after ready so dashboards see
+	// the natural "ready then replaced" sequence. Distinct from
+	// image.ready so the audit timeline stays separable.
+	if force && im.emitter != nil {
+		im.emitter.Publish(imagestate.EventForceReplaced, map[string]any{
+			"name":       name,
+			"old_digest": oldDigest,
+			"new_digest": manifest.Digest,
+		})
+	}
+
+	im.log.Info("image registered from registry",
+		"name", name, "digest", manifest.Digest, "rootfs", rootfs, "force", force)
+}
+
+// extractLayer pulls a single layer over the wire (compressed), meters
+// network bytes for image.layer_progress events, decompresses, and
+// extracts to dst. layer_progress events are only emitted while the
+// ledger is in extracting (Update→extracting must have run first); the
+// orchestrator guarantees that ordering by calling this only after the
+// ledger transition.
+func (im *ImageManager) extractLayer(
+	imageName string,
+	layer registry.LayerInfo,
+	manifest *registry.Manifest,
+	extractor *imageops.LayerExtractor,
+	dst string,
+) error {
+	rawRC, err := manifest.CompressedLayerReader(layer.Digest)
+	if err != nil {
+		return fmt.Errorf("open layer %s: %w", layer.Digest, err)
+	}
+	defer rawRC.Close()
+
+	pr := newProgressReader(rawRC, layer.Size, func(done int64) {
+		if im.emitter == nil {
+			return
+		}
+		im.emitter.Publish(imagestate.EventLayerProgress, map[string]any{
+			"name":         imageName,
+			"layer_digest": layer.Digest,
+			"bytes_done":   done,
+			"bytes_total":  layer.Size,
+		})
+	})
+
+	gz, err := gzip.NewReader(pr)
+	if err != nil {
+		return fmt.Errorf("gunzip layer %s: %w", layer.Digest, err)
+	}
+	defer gz.Close()
+
+	if err := extractor.Extract(dst, gz); err != nil {
+		return fmt.Errorf("extract layer %s: %w", layer.Digest, err)
+	}
+
+	// Final progress emit — bytes_done == bytes_total.
+	pr.flushFinal()
+	return nil
+}
+
+// progressReader counts bytes flowing through the underlying reader and
+// invokes onEmit at most once per progressByteThreshold bytes or
+// progressTimeThreshold of wall-clock time. Final emit is sent
+// explicitly via flushFinal.
+type progressReader struct {
+	r           io.Reader
+	total       int64
+	read        atomic.Int64
+	lastEmitted int64
+	lastEmitAt  time.Time
+	onEmit      func(bytesDone int64)
+	emittedFinal bool
+}
+
+func newProgressReader(r io.Reader, total int64, onEmit func(int64)) *progressReader {
+	return &progressReader{
+		r:          r,
+		total:      total,
+		onEmit:     onEmit,
+		lastEmitAt: time.Now(),
+	}
+}
+
+func (p *progressReader) Read(buf []byte) (int, error) {
+	n, err := p.r.Read(buf)
+	if n > 0 {
+		done := p.read.Add(int64(n))
+		bytesSinceEmit := done - p.lastEmitted
+		if bytesSinceEmit >= progressByteThreshold ||
+			time.Since(p.lastEmitAt) >= progressTimeThreshold {
+			p.lastEmitted = done
+			p.lastEmitAt = time.Now()
+			p.onEmit(done)
+		}
+	}
+	return n, err
+}
+
+func (p *progressReader) flushFinal() {
+	if p.emittedFinal {
+		return
+	}
+	p.emittedFinal = true
+	done := p.read.Load()
+	if p.total > 0 && done < p.total {
+		// EOF was reached early — emit the smaller of the two so consumers
+		// don't see bytes_done < bytes_total at the end.
+		done = p.total
+	}
+	p.onEmit(done)
+}
+
+// dockerInspectConfig pulls Env/WorkingDir/User out of `docker inspect` for a
+// built image tag. Returns a zero-value config if the field is absent.
+func dockerInspectConfig(ctx context.Context, target string) (imageconfig.ImageConfig, error) {
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "--format={{json .Config}}", target).Output()
+	if err != nil {
+		return imageconfig.ImageConfig{}, fmt.Errorf("docker inspect: %w", err)
+	}
+	var raw struct {
+		Env        []string `json:"Env"`
+		WorkingDir string   `json:"WorkingDir"`
+		User       string   `json:"User"`
+	}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return imageconfig.ImageConfig{}, fmt.Errorf("parse docker inspect output: %w", err)
+	}
+	return imageconfig.ImageConfig{
+		Env:     raw.Env,
+		WorkDir: raw.WorkingDir,
+		User:    raw.User,
+	}, nil
+}
+
+// dockerInspectLabels pulls Config.Labels out of `docker inspect`. Used
+// by the Dockerfile flow for parity with the registry pull's label
+// surfacing on GET /images/{name}. Returns nil on absent or empty.
+func dockerInspectLabels(ctx context.Context, target string) (map[string]string, error) {
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "--format={{json .Config}}", target).Output()
+	if err != nil {
+		return nil, fmt.Errorf("docker inspect: %w", err)
+	}
+	var raw struct {
+		Labels map[string]string `json:"Labels"`
+	}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return nil, fmt.Errorf("parse docker inspect output: %w", err)
+	}
+	if len(raw.Labels) == 0 {
+		return nil, nil
+	}
+	return raw.Labels, nil
+}
+
+// writeImageConfigToRootfs mounts ext4Path and writes the image config file.
+// Linux-only at runtime (uses mount/umount); compiles everywhere.
+func (im *ImageManager) writeImageConfigToRootfs(ctx context.Context, ext4Path string, cfg imageconfig.ImageConfig) error {
+	mountDir := ext4Path + ".cfg-mount"
+	if err := os.MkdirAll(mountDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir mount: %w", err)
+	}
+	defer os.RemoveAll(mountDir)
+
+	mountCmd := exec.CommandContext(ctx, "mount", "-o", "loop", ext4Path, mountDir)
+	if err := mountCmd.Run(); err != nil {
+		return fmt.Errorf("mount: %w", err)
+	}
+	defer exec.CommandContext(ctx, "umount", mountDir).Run()
+
+	return imageops.WriteImageConfig(mountDir, cfg)
 }
 
 // injectAgent copies the pyro-agent binary into the rootfs at /usr/bin/pyro-agent.

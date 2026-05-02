@@ -14,6 +14,12 @@ from pyro_sdk.errors import (
     SandboxNotFoundError,
     ServerError,
 )
+from pyro_sdk.images import (
+    _ImagesNamespace,
+    _image_get,
+    _image_post,
+    _sse_image_events,
+)
 from pyro_sdk.models import SandboxInfo
 from pyro_sdk.sandbox import Sandbox
 
@@ -99,6 +105,17 @@ class Pyro:
         ).rstrip("/")
         self._http = httpx.AsyncClient(timeout=timeout)
         self.sandbox = _SandboxNamespace(self)
+        self.images = _ImagesNamespace(self)
+
+    # --- image plumbing (delegated to images.py) ---
+    async def _image_get(self, name: str):
+        return await _image_get(self, name)
+
+    async def _image_post(self, body):
+        return await _image_post(self, body)
+
+    def _sse_image_events(self, name: str, timeout=None):
+        return _sse_image_events(self, name, timeout=timeout)
 
     def _headers(self) -> dict[str, str]:
         return {

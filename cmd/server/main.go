@@ -143,6 +143,9 @@ func main() {
 			log.Error("snapshot pool init failed", "err", err)
 		} else {
 			mgr.SetPool(pool)
+			if imgMgr != nil {
+				imgMgr.SetInvalidator(pool)
+			}
 			go pool.Run(reaperCtx)
 		}
 	}
@@ -155,6 +158,11 @@ func main() {
 
 	// Event bus for SSE streaming.
 	eventBus := api.NewEventBus()
+
+	// Wire image lifecycle events into the bus.
+	if imgMgr != nil {
+		imgMgr.SetEmitter(eventBus)
+	}
 
 	// Health tick — publish active count every 5s over SSE.
 	go func() {

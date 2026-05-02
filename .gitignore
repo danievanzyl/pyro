@@ -15,5 +15,6 @@ ui/bun.lock
 /server
 sdk/python/.venv/
 sdk/python/*.egg-info/
+sdk/python/**/__pycache__/
 sdk/typescript/node_modules/
 network-requests.txt

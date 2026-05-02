@@ -2,12 +2,16 @@ package api
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/danievanzyl/pyro/internal/sandbox"
 	"github.com/danievanzyl/pyro/internal/store"
 )
 
@@ -188,6 +192,61 @@ func TestCreateSandboxValidation(t *testing.T) {
 
 			if w.Code != tt.status {
 				t.Errorf("status = %d, want %d (body: %s)", w.Code, tt.status, w.Body.String())
+			}
+		})
+	}
+}
+
+// TestCreateSandbox_RejectsNonReadyImage covers the 409 path for the
+// async-pull flow: an image that is still pulling (or has failed) must
+// not boot a sandbox.
+func TestCreateSandbox_RejectsNonReadyImage(t *testing.T) {
+	dir := t.TempDir()
+	imgMgr, err := sandbox.NewImageManager(sandbox.ImageConfig{ImagesDir: dir}, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name      string
+		seed      func()
+		wantInBody string
+	}{
+		{
+			name: "pulling",
+			seed: func() {
+				imgMgr.Ledger().Begin("py312", "python:3.12")
+			},
+			wantInBody: "pulling",
+		},
+		{
+			name: "failed",
+			seed: func() {
+				imgMgr.Ledger().Begin("brokenpy", "python:3.12")
+				_ = imgMgr.Ledger().Fail("brokenpy", errors.New("registry unreachable"))
+			},
+			wantInBody: "registry unreachable",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.seed()
+			body := `{"ttl":60,"image":"` + map[string]string{"pulling": "py312", "failed": "brokenpy"}[tc.name] + `"}`
+			req := httptest.NewRequest("POST", "/sandboxes", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			ctx := context.WithValue(req.Context(), apiKeyContextKey, &store.APIKey{ID: "test"})
+			req = req.WithContext(ctx)
+
+			w := httptest.NewRecorder()
+			s := &Server{imageMgr: imgMgr}
+			s.handleCreateSandbox(w, req)
+
+			if w.Code != http.StatusConflict {
+				t.Fatalf("status = %d want 409; body=%s", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), tc.wantInBody) {
+				t.Errorf("body does not surface reason %q: %s", tc.wantInBody, w.Body.String())
 			}
 		})
 	}

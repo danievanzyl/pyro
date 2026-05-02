@@ -2,9 +2,12 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/danievanzyl/pyro/internal/sandbox"
+	"github.com/danievanzyl/pyro/internal/sandbox/imageops"
+	"github.com/danievanzyl/pyro/internal/sandbox/imagestate"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -51,8 +54,10 @@ func handleGetImage(imgMgr *sandbox.ImageManager) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid image name"})
 			return
 		}
-		info, err := imgMgr.Get(name)
-		if err != nil {
+		// Status() prefers ledger over disk so in-flight and recently-failed
+		// pulls are visible.
+		info := imgMgr.Status(name)
+		if info == nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "image not found"})
 			return
 		}
@@ -61,9 +66,16 @@ func handleGetImage(imgMgr *sandbox.ImageManager) http.HandlerFunc {
 }
 
 // CreateImageRequest is the body for POST /images.
+//
+// Exactly one of Dockerfile or Source must be set.
 type CreateImageRequest struct {
 	Name       string `json:"name"`
-	Dockerfile string `json:"dockerfile"` // path to Dockerfile on the host
+	Dockerfile string `json:"dockerfile,omitempty"` // path to Dockerfile on the host
+	Source     string `json:"source,omitempty"`     // OCI image reference, e.g. "python:3.12"
+	// Force triggers a fresh pull and atomic replacement when the name
+	// already exists. Without it, registering a name that's already
+	// present is an idempotent no-op (returns the existing image).
+	Force bool `json:"force,omitempty"`
 }
 
 func handleCreateImage(imgMgr *sandbox.ImageManager) http.HandlerFunc {
@@ -81,17 +93,62 @@ func handleCreateImage(imgMgr *sandbox.ImageManager) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid image name"})
 			return
 		}
-		if req.Dockerfile == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "dockerfile path is required"})
+		hasDockerfile := req.Dockerfile != ""
+		hasSource := req.Source != ""
+		if hasDockerfile == hasSource {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "exactly one of dockerfile or source must be set",
+			})
 			return
 		}
 
+		if hasSource {
+			// Async: returns immediately with status=pulling, OR returns
+			// the existing image (no pull) for the idempotent path.
+			// ErrSourceConflict → 409 (concurrent caller with different
+			// source). ErrForceDuringPull → 409 (force while another pull
+			// is in flight). Size cap → 413. Anything else → 500.
+			info, err := imgMgr.CreateFromRegistry(r.Context(), req.Name, req.Source, req.Force, nil)
+			if err != nil {
+				if errors.Is(err, imagestate.ErrSourceConflict) {
+					writeJSON(w, http.StatusConflict, map[string]string{
+						"error": err.Error() + " — wait for completion or use force",
+					})
+					return
+				}
+				if errors.Is(err, imagestate.ErrForceDuringPull) {
+					writeJSON(w, http.StatusConflict, map[string]string{
+						"error": err.Error(),
+					})
+					return
+				}
+				var tooLarge *imageops.ImageTooLargeError
+				if errors.As(err, &tooLarge) {
+					writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
+						"error":        "image too large",
+						"limit_mb":     tooLarge.LimitMB,
+						"estimated_mb": tooLarge.EstimatedMB,
+					})
+					return
+				}
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "register failed: " + err.Error()})
+				return
+			}
+			// Idempotent existing → 200; freshly started pull → 202.
+			if info.Status == imagestate.StatusReady {
+				writeJSON(w, http.StatusOK, info)
+			} else {
+				writeJSON(w, http.StatusAccepted, info)
+			}
+			return
+		}
+
+		// Dockerfile path stays synchronous in this slice.
 		info, err := imgMgr.CreateFromDockerfile(r.Context(), req.Name, req.Dockerfile)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "build failed: " + err.Error()})
 			return
 		}
-
 		writeJSON(w, http.StatusCreated, info)
 	}
 }

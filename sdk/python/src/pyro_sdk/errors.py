@@ -53,3 +53,58 @@ class ServerError(PyroError):
 
     def __init__(self, message: str = "Internal server error"):
         super().__init__(message, status_code=500)
+
+
+class ImageError(PyroError):
+    """Base error for image-management failures."""
+
+
+class ImageNotFoundError(ImageError):
+    """Raised when GET /images/{name} returns 404."""
+
+    def __init__(self, name: str):
+        super().__init__(f"image not found: {name}", status_code=404)
+        self.image_name = name
+
+
+class ImageRegistrationError(ImageError):
+    """Raised when a pull terminates in `failed` state."""
+
+    def __init__(self, name: str, message: str):
+        super().__init__(f"image {name!r} registration failed: {message}")
+        self.image_name = name
+        self.server_message = message
+
+
+class ImageConflictError(ImageError):
+    """Raised when an existing image's source disagrees with the requested source.
+
+    `ensure()` raises this rather than silently re-pulling. Pass `force=True`
+    to `create()` to replace.
+    """
+
+    def __init__(
+        self, name: str, existing_source: str, requested_source: str
+    ):
+        super().__init__(
+            f"image {name!r} already registered with source "
+            f"{existing_source!r}; requested {requested_source!r}",
+            status_code=409,
+        )
+        self.image_name = name
+        self.existing_source = existing_source
+        self.requested_source = requested_source
+
+
+class ImageTooLargeError(ImageError):
+    """Raised on 413 — pull would exceed the server's disk cap."""
+
+    def __init__(self, name: str, limit_mb: int, estimated_mb: int):
+        super().__init__(
+            f"image {name!r} too large: "
+            f"~{estimated_mb} MB exceeds limit {limit_mb} MB",
+            status_code=413,
+        )
+        self.image_name = name
+        self.limit_mb = limit_mb
+        self.estimated_mb = estimated_mb
