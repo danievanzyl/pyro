@@ -42,3 +42,44 @@ export interface PyroConfig {
   baseUrl?: string;
   timeout?: number;
 }
+
+/** Image metadata from the Pyro images API.
+ *
+ * Mirrors `internal/sandbox.ImageInfo`. Most fields are `omitzero` on the
+ * server, so empty values stay defaulted for in-flight or legacy entries.
+ */
+export interface ImageInfo {
+  name: string;
+  status: string;
+  source: string;
+  digest: string;
+  error: string;
+  rootfsPath: string;
+  kernelPath: string;
+  size: number;
+  labels: Record<string, string>;
+  createdAt: string;
+}
+
+/** Options for `images.create()`. Supply exactly one of `source` or `dockerfile`. */
+export interface CreateImageOptions {
+  name: string;
+  source?: string;
+  dockerfile?: string;
+  force?: boolean;
+}
+
+/** Options for `images.createAndWait()`. */
+export interface CreateAndWaitImageOptions extends CreateImageOptions {
+  /** Wait timeout in ms. */
+  timeout?: number;
+}
+
+/** Options for `images.ensure()`. */
+export interface EnsureImageOptions {
+  name: string;
+  source?: string;
+  dockerfile?: string;
+  /** Wait timeout in ms. */
+  timeout?: number;
+}

@@ -63,3 +63,79 @@ export class ServerError extends PyroError {
     this.name = "ServerError";
   }
 }
+
+/** Raised when an image operation times out. */
+export class TimeoutError extends PyroError {
+  constructor(message = "operation timed out") {
+    super(message);
+    this.name = "TimeoutError";
+  }
+}
+
+/** Base error for image-management failures. */
+export class ImageError extends PyroError {
+  constructor(message: string, statusCode?: number) {
+    super(message, statusCode);
+    this.name = "ImageError";
+  }
+}
+
+/** Raised when GET /images/{name} returns 404. */
+export class ImageNotFoundError extends ImageError {
+  imageName: string;
+  constructor(name: string) {
+    super(`image not found: ${name}`, 404);
+    this.name = "ImageNotFoundError";
+    this.imageName = name;
+  }
+}
+
+/** Raised when a pull terminates in `failed` state. */
+export class ImageRegistrationError extends ImageError {
+  imageName: string;
+  serverMessage: string;
+  constructor(name: string, message: string) {
+    super(`image '${name}' registration failed: ${message}`);
+    this.name = "ImageRegistrationError";
+    this.imageName = name;
+    this.serverMessage = message;
+  }
+}
+
+/** Raised when an existing image's source disagrees with the requested source.
+ *
+ * `ensure()` raises this rather than silently re-pulling. Pass `force: true`
+ * to `create()` to replace.
+ */
+export class ImageConflictError extends ImageError {
+  imageName: string;
+  existingSource: string;
+  requestedSource: string;
+  constructor(name: string, existingSource: string, requestedSource: string) {
+    super(
+      `image '${name}' already registered with source '${existingSource}'; requested '${requestedSource}'`,
+      409,
+    );
+    this.name = "ImageConflictError";
+    this.imageName = name;
+    this.existingSource = existingSource;
+    this.requestedSource = requestedSource;
+  }
+}
+
+/** Raised on 413 — pull would exceed the server's disk cap. */
+export class ImageTooLargeError extends ImageError {
+  imageName: string;
+  limitMb: number;
+  estimatedMb: number;
+  constructor(name: string, limitMb: number, estimatedMb: number) {
+    super(
+      `image '${name}' too large: ~${estimatedMb} MB exceeds limit ${limitMb} MB`,
+      413,
+    );
+    this.name = "ImageTooLargeError";
+    this.imageName = name;
+    this.limitMb = limitMb;
+    this.estimatedMb = estimatedMb;
+  }
+}

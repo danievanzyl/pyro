@@ -66,6 +66,38 @@ Read a file from the sandbox. Returns `Uint8Array`.
 
 Destroy the sandbox.
 
+### `pyro.images.ensure(options)`
+
+Idempotently register an image. Attaches to in-flight pulls; returns existing
+on a ready match; throws `ImageConflictError` on source mismatch; never silently
+forces. Options: `name`, `source` (or `dockerfile`), `timeout` (ms).
+
+```typescript
+const info = await pyro.images.ensure({ name: 'py312', source: 'python:3.12' })
+console.log(info.status) // "ready"
+// Second call short-circuits — no pull.
+await pyro.images.ensure({ name: 'py312', source: 'python:3.12' })
+```
+
+### `pyro.images.create(options)`
+
+Start a registration without blocking. Returns a `PullOperation`. Maps server
+errors to `ImageConflictError` (409) and `ImageTooLargeError` (413).
+
+```typescript
+const op = await pyro.images.create({ name: 'py312', source: 'python:3.12' })
+const info = await op.wait(180_000) // ms timeout
+```
+
+### `pyro.images.createAndWait(options)`
+
+Convenience wrapper: `create` + `wait`. Throws `ImageRegistrationError` on
+failure, `TimeoutError` on deadline.
+
+### `pyro.images.get(name)`
+
+Fetch current `ImageInfo`. Throws `ImageNotFoundError` on 404.
+
 ### `pyro.health()`
 
 Check server health. Returns `{ status, active_sandboxes }`.

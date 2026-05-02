@@ -5,8 +5,20 @@ import {
   SandboxNotFoundError,
   ServerError,
 } from "./errors.js";
+import {
+  ImagesNamespace,
+  imageGetRequest,
+  imagePostRequest,
+  sseImageEventsImpl,
+} from "./images.js";
+import type { ImageEvent } from "./images.js";
 import { Sandbox, parseSandboxInfo } from "./sandbox.js";
-import type { CreateSandboxOptions, PyroConfig, SandboxInfo } from "./types.js";
+import type {
+  CreateSandboxOptions,
+  ImageInfo,
+  PyroConfig,
+  SandboxInfo,
+} from "./types.js";
 
 class SandboxNamespace {
   private client: Pyro;
@@ -70,6 +82,7 @@ class SandboxNamespace {
 export class Pyro {
   readonly baseUrl: string;
   readonly sandbox: SandboxNamespace;
+  readonly images: ImagesNamespace;
   private apiKey: string;
   private timeout: number;
 
@@ -83,6 +96,7 @@ export class Pyro {
     ).replace(/\/+$/, "");
     this.timeout = config?.timeout ?? 30_000;
     this.sandbox = new SandboxNamespace(this);
+    this.images = new ImagesNamespace(this);
   }
 
   /** @internal */
@@ -91,6 +105,11 @@ export class Pyro {
       Authorization: `Bearer ${this.apiKey}`,
       "Content-Type": "application/json",
     };
+  }
+
+  /** @internal — exposed for SSE which can't set Authorization header. */
+  get apiKeyForSse(): string {
+    return this.apiKey;
   }
 
   /** @internal */
@@ -128,6 +147,21 @@ export class Pyro {
     if (status === 429) throw new QuotaError(message);
     if (status >= 500) throw new ServerError(message);
     throw new PyroError(message, status);
+  }
+
+  /** @internal — overridable for tests. */
+  imageGet(name: string): Promise<ImageInfo> {
+    return imageGetRequest(this, name);
+  }
+
+  /** @internal — overridable for tests. */
+  imagePost(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return imagePostRequest(this, body);
+  }
+
+  /** @internal — overridable for tests; default streams SSE from /events. */
+  sseImageEvents(name: string, timeoutMs?: number): AsyncIterable<ImageEvent> {
+    return sseImageEventsImpl(this, name, timeoutMs);
   }
 
   /** Check server health. */
