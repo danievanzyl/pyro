@@ -1,16 +1,24 @@
-// Shared API key — reads from localStorage, no reactive state.
+// Shared API key — reactive $state, persisted to localStorage.
 
 const STORAGE_KEY = 'pyro_api_key';
 
-export function getApiKey() {
+function loadStored() {
 	if (typeof localStorage === 'undefined') return '';
 	return localStorage.getItem(STORAGE_KEY) || '';
 }
 
+export const authState = $state({ apiKey: loadStored() });
+
+export function getApiKey() {
+	return authState.apiKey;
+}
+
 export function setApiKey(key) {
+	const next = key || '';
+	authState.apiKey = next;
 	if (typeof localStorage === 'undefined') return;
-	if (key) {
-		localStorage.setItem(STORAGE_KEY, key);
+	if (next) {
+		localStorage.setItem(STORAGE_KEY, next);
 	} else {
 		localStorage.removeItem(STORAGE_KEY);
 	}
@@ -18,12 +26,12 @@ export function setApiKey(key) {
 
 // For template conditionals: {#if hasApiKey()}
 export function hasApiKey() {
-	return getApiKey() !== '';
+	return authState.apiKey !== '';
 }
 
 // Fetch helper with auth header.
 export async function apiFetch(path, opts = {}) {
-	const key = getApiKey();
+	const key = authState.apiKey;
 	if (!key) {
 		return new Response(JSON.stringify({ error: 'no api key' }), { status: 401 });
 	}
