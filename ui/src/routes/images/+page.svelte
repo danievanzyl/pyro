@@ -1,5 +1,6 @@
 <script>
 	import { apiFetch, hasApiKey } from '$lib/auth.svelte.js';
+	import { subscribe } from '$lib/events.svelte.js';
 
 	let authenticated = $state(hasApiKey());
 	let images = $state([]);
@@ -24,6 +25,62 @@
 		} catch (e) { error = e.message; }
 	}
 
+	// Pull a single image's full ImageInfo and merge into the list.
+	// SSE image.ready payload only carries {name,digest,size}; size/kernel/
+	// created_at/labels live on disk and need a refetch.
+	async function hydrate(name) {
+		try {
+			const res = await apiFetch(`/images/${encodeURIComponent(name)}`);
+			if (!res.ok) return;
+			const info = await res.json();
+			const i = images.findIndex((x) => x.name === name);
+			if (i >= 0) images[i] = info;
+			else images = [info, ...images];
+		} catch {}
+	}
+
+	function upsert(name, patch) {
+		const i = images.findIndex((x) => x.name === name);
+		if (i >= 0) {
+			images[i] = { ...images[i], ...patch };
+		} else {
+			images = [{ name, ...patch }, ...images];
+		}
+	}
+
+	function chipClass(status) {
+		if (status === 'ready') return 'badge-running';
+		if (status === 'failed') return 'badge-error';
+		return 'badge-creating'; // pulling | extracting | empty
+	}
+
+	function chipLabel(status) {
+		return (status || 'ready').toUpperCase();
+	}
+
+	$effect(() => {
+		const unsubs = [
+			subscribe('image.pulling', (e) => {
+				const d = JSON.parse(e.data);
+				upsert(d.name, { status: 'pulling', source: d.source, error: '' });
+			}),
+			subscribe('image.extracting', (e) => {
+				const d = JSON.parse(e.data);
+				upsert(d.name, { status: 'extracting' });
+			}),
+			subscribe('image.ready', (e) => {
+				const d = JSON.parse(e.data);
+				hydrate(d.name);
+			}),
+			subscribe('image.failed', (e) => {
+				const d = JSON.parse(e.data);
+				upsert(d.name, { status: 'failed', error: d.error || '' });
+			}),
+			// image.force_replaced ignored — image.ready already triggered hydrate.
+		];
+		return () => unsubs.forEach((u) => u());
+	});
+
 	if (authenticated) refresh();
 </script>
 
@@ -47,13 +104,15 @@
 			<thead>
 				<tr>
 					<th>Name</th>
+					<th>Status</th>
 					<th>Size</th>
 					<th>Kernel</th>
 					<th>Created</th>
 				</tr>
 			</thead>
 			<tbody>
-				{#each images as img}
+				{#each images as img (img.name)}
+					{@const ready = img.status === 'ready' || !img.status}
 					<tr>
 						<td>
 							<div class="image-name">
@@ -61,9 +120,17 @@
 								<strong>{img.name}</strong>
 							</div>
 						</td>
-						<td>{formatSize(img.size)}</td>
-						<td class="mono" style="font-size:0.75rem;">{img.kernel_path ? 'vmlinux' : '—'}</td>
-						<td>{img.created_at ? formatDate(img.created_at) : '—'}</td>
+						<td>
+							<span
+								class="badge {chipClass(img.status)}"
+								title={img.status === 'failed' ? img.error || 'Pull failed' : ''}
+							>
+								{chipLabel(img.status)}
+							</span>
+						</td>
+						<td>{ready ? formatSize(img.size) : '—'}</td>
+						<td class="mono" style="font-size:0.75rem;">{ready && img.kernel_path ? 'vmlinux' : '—'}</td>
+						<td>{ready && img.created_at ? formatDate(img.created_at) : '—'}</td>
 					</tr>
 				{/each}
 			</tbody>
