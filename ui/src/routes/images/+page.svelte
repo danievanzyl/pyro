@@ -1,10 +1,23 @@
 <script>
 	import { apiFetch, hasApiKey } from '$lib/auth.svelte.js';
 	import { subscribe } from '$lib/events.svelte.js';
+	import CreateImageModal from '$lib/CreateImageModal.svelte';
 
 	let authenticated = $state(hasApiKey());
 	let images = $state([]);
 	let error = $state('');
+	let modalOpen = $state(false);
+
+	function openCreate() { modalOpen = true; }
+
+	// 200/202 path: unshift returned ImageInfo (or replace by name).
+	// SSE handlers drive subsequent state transitions for 202.
+	function onCreated(info) {
+		if (!info || !info.name) return;
+		const i = images.findIndex((x) => x.name === info.name);
+		if (i >= 0) images[i] = info;
+		else images = [info, ...images];
+	}
 
 	function formatSize(bytes) {
 		if (bytes < 1024) return bytes + ' B';
@@ -89,7 +102,15 @@
 		<h1>Base Images</h1>
 		<p class="subtitle">Rootfs images available for sandbox creation</p>
 	</div>
+	{#if authenticated}
+		<button class="btn-primary" onclick={openCreate}>
+			<span class="material-symbols-outlined" style="font-size:1rem;">add</span>
+			Create image
+		</button>
+	{/if}
 </div>
+
+<CreateImageModal bind:open={modalOpen} {images} {onCreated} />
 
 {#if error}
 	<div class="error-banner">
@@ -152,7 +173,13 @@
 {/if}
 
 <style>
-	.page-header { margin-bottom: 1.25rem; }
+	.page-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
+		margin-bottom: 1.25rem;
+	}
 	h1 { font-family: var(--font-headline); font-size: 1.5rem; font-weight: 700; }
 	.subtitle { color: var(--on-surface-variant); font-size: 0.8rem; margin-top: 0.15rem; }
 
