@@ -7,8 +7,16 @@
 	let images = $state([]);
 	let error = $state('');
 	let modalOpen = $state(false);
+	let prefill = $state(null);
 
-	function openCreate() { modalOpen = true; }
+	function openCreate() { prefill = null; modalOpen = true; }
+
+	// Retry: reopen modal pre-filled with the failed row's name+source and
+	// force=true. Modal resets state on open transition and honors prefill.
+	function retry(img) {
+		prefill = { name: img.name, source: img.source || '', force: true };
+		modalOpen = true;
+	}
 
 	// 200/202 path: unshift returned ImageInfo (or replace by name).
 	// SSE handlers drive subsequent state transitions for 202.
@@ -110,7 +118,7 @@
 	{/if}
 </div>
 
-<CreateImageModal bind:open={modalOpen} {images} {onCreated} />
+<CreateImageModal bind:open={modalOpen} {images} {prefill} {onCreated} />
 
 {#if error}
 	<div class="error-banner">
@@ -142,12 +150,24 @@
 							</div>
 						</td>
 						<td>
-							<span
-								class="badge {chipClass(img.status)}"
-								title={img.status === 'failed' ? img.error || 'Pull failed' : ''}
-							>
-								{chipLabel(img.status)}
-							</span>
+							<div class="status-cell">
+								<span
+									class="badge {chipClass(img.status)}"
+									title={img.status === 'failed' ? img.error || 'Pull failed' : ''}
+								>
+									{chipLabel(img.status)}
+								</span>
+								{#if img.status === 'failed'}
+									<button
+										class="btn-icon retry"
+										title="Retry pull"
+										aria-label="Retry pull"
+										onclick={() => retry(img)}
+									>
+										<span class="material-symbols-outlined" style="font-size:1rem;">refresh</span>
+									</button>
+								{/if}
+							</div>
 						</td>
 						<td>{ready ? formatSize(img.size) : '—'}</td>
 						<td class="mono" style="font-size:0.75rem;">{ready && img.kernel_path ? 'vmlinux' : '—'}</td>
@@ -184,6 +204,8 @@
 	.subtitle { color: var(--on-surface-variant); font-size: 0.8rem; margin-top: 0.15rem; }
 
 	.image-name { display: flex; align-items: center; gap: 0.5rem; }
+	.status-cell { display: flex; align-items: center; gap: 0.5rem; }
+	.retry { width: 1.75rem; height: 1.75rem; }
 
 	.cmd {
 		display: inline-block;
