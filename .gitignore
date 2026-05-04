@@ -19,3 +19,5 @@ sdk/python/**/__pycache__/
 sdk/typescript/node_modules/
 sdk/typescript/dist/
 network-requests.txt
+issues/done/*.md
+issues/*.md
