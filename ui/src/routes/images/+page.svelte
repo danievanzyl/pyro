@@ -144,10 +144,10 @@
 					{@const ready = img.status === 'ready' || !img.status}
 					<tr>
 						<td>
-							<div class="image-name">
+							<a class="image-name" href="/images/{encodeURIComponent(img.name)}">
 								<span class="material-symbols-outlined" style="font-size:1.1rem; color:var(--on-surface-variant);">inventory_2</span>
 								<strong>{img.name}</strong>
-							</div>
+							</a>
 						</td>
 						<td>
 							<div class="status-cell">
@@ -203,7 +203,14 @@
 	h1 { font-family: var(--font-headline); font-size: 1.5rem; font-weight: 700; }
 	.subtitle { color: var(--on-surface-variant); font-size: 0.8rem; margin-top: 0.15rem; }
 
-	.image-name { display: flex; align-items: center; gap: 0.5rem; }
+	.image-name {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		color: var(--on-surface);
+		text-decoration: none;
+	}
+	.image-name:hover { color: var(--primary); }
 	.status-cell { display: flex; align-items: center; gap: 0.5rem; }
 	.retry { width: 1.75rem; height: 1.75rem; }
 
