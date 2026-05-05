@@ -1,6 +1,13 @@
 <script>
 	import '../app.css';
+	import { authState } from '$lib/auth.svelte.js';
+	import { connect, disconnect } from '$lib/events.svelte.js';
 	let { children } = $props();
+
+	$effect(() => {
+		if (authState.apiKey) connect(authState.apiKey);
+		else disconnect();
+	});
 
 	const navItems = [
 		{ href: '/', icon: 'dashboard', label: 'Fleet' },

@@ -1,5 +1,6 @@
 <script>
 	import { hasApiKey, getApiKey, setApiKey, apiFetch } from '$lib/auth.svelte.js';
+	import { subscribe } from '$lib/events.svelte.js';
 
 	let health = $state(null);
 	let sandboxes = $state([]);
@@ -28,7 +29,6 @@
 			setApiKey(key);
 			authenticated = true;
 			fetchData();
-			connectSSE();
 		} catch (e) {
 			authError = 'Connection failed: ' + e.message;
 		}
@@ -41,7 +41,6 @@
 		sandboxes = [];
 		health = null;
 		apiKeys = [];
-		if (eventSource) { eventSource.close(); eventSource = null; }
 	}
 
 	async function fetchKeys() {
@@ -104,37 +103,29 @@
 		return 'badge-stopped';
 	}
 
-	let eventSource;
-	let sseRetries = 0;
-
-	function connectSSE() {
-		const key = getApiKey();
-		if (!key || sseRetries > 3) return;
-		if (eventSource) { eventSource.close(); eventSource = null; }
-
-		eventSource = new EventSource(`/api/events?api_key=${key}`);
-		eventSource.addEventListener('health.tick', (e) => {
-			try {
-				const data = JSON.parse(e.data);
-				if (health) {
-					health.active_sandboxes = data.data?.active_sandboxes ?? health.active_sandboxes;
-					if (data.data?.pool_stats) health.pool_stats = data.data.pool_stats;
-				}
-			} catch {}
-		});
-		eventSource.addEventListener('sandbox.created', () => fetchData());
-		eventSource.addEventListener('sandbox.destroyed', () => fetchData());
-		eventSource.addEventListener('connected', () => { sseRetries = 0; });
-		eventSource.onerror = () => {
-			sseRetries++;
-			if (eventSource) { eventSource.close(); eventSource = null; }
+	$effect(() => {
+		const unsubs = [
+			subscribe('health.tick', (e) => {
+				try {
+					const data = JSON.parse(e.data);
+					if (health) {
+						health.active_sandboxes = data.data?.active_sandboxes ?? health.active_sandboxes;
+						if (data.data?.pool_stats) health.pool_stats = data.data.pool_stats;
+					}
+				} catch {}
+			}),
+			subscribe('sandbox.created', () => fetchData()),
+			subscribe('sandbox.destroyed', () => fetchData()),
+		];
+		const fallbackTimer = setInterval(fetchData, 5000);
+		return () => {
+			unsubs.forEach((u) => u());
+			clearInterval(fallbackTimer);
 		};
-	}
+	});
 
 	fetchData();
 	fetchKeys();
-	connectSSE();
-	setInterval(fetchData, 5000);
 </script>
 
 {#if error}

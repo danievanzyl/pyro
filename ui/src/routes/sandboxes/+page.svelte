@@ -1,5 +1,6 @@
 <script>
-	import { apiFetch, getApiKey } from '$lib/auth.svelte.js';
+	import { apiFetch } from '$lib/auth.svelte.js';
+	import { subscribe } from '$lib/events.svelte.js';
 
 	let sandboxes = $state([]);
 	let kernels = $state([]);
@@ -27,23 +28,18 @@
 		} catch {}
 	}
 
-	let eventSource = null;
-	let sseRetries = 0;
-
-	function connectSSE() {
-		const key = getApiKey();
-		if (!key || sseRetries > 3) return;
-		eventSource = new EventSource(`/api/events?api_key=${encodeURIComponent(key)}`);
-		eventSource.addEventListener('sandbox.created', () => refresh());
-		eventSource.addEventListener('sandbox.destroyed', () => refresh());
-		eventSource.addEventListener('sandbox.exec', () => refresh());
-		eventSource.addEventListener('connected', () => { sseRetries = 0; });
-		eventSource.onerror = () => {
-			sseRetries++;
-			eventSource.close();
-			eventSource = null;
+	$effect(() => {
+		const unsubs = [
+			subscribe('sandbox.created', () => refresh()),
+			subscribe('sandbox.destroyed', () => refresh()),
+			subscribe('sandbox.exec', () => refresh()),
+		];
+		const fallbackTimer = setInterval(refresh, 10000); // Fallback polling (SSE handles real-time)
+		return () => {
+			unsubs.forEach((u) => u());
+			clearInterval(fallbackTimer);
 		};
-	}
+	});
 
 	async function createSandbox() {
 		creating = true;
@@ -89,8 +85,6 @@
 
 	refresh();
 	fetchKernels();
-	connectSSE();
-	setInterval(refresh, 10000); // Fallback polling (SSE handles real-time)
 </script>
 
 <div class="page-header">

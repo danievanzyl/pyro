@@ -43,3 +43,4 @@
 - [ ] Multi-host clustering (out of scope for v1)
 - [ ] GPU passthrough
 - [ ] Prometheus /metrics endpoint serving (OTEL provider is wired, needs HTTP handler)
+- [ ] UI test harness: Vitest + svelte-testing-library for component/singleton tests, Playwright for e2e (deferred from docker-images-ui PR)
