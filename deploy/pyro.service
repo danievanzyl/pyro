@@ -15,11 +15,11 @@ ExecStart=/opt/pyro/bin/pyro-server \
   --kernel /opt/pyro/images/vmlinux \
   --rootfs /opt/pyro/images/default/rootfs.ext4 \
   --bridge fcbr0 \
-  --max-sandboxes 50 \
-  --max-per-key 10 \
+  --max-sandboxes 0 \
+  --max-per-key 0 \
   --rate-limit 30 \
-  --max-vcpu 4 \
-  --max-mem-mib 2048 \
+  --max-vcpu 0 \
+  --max-mem-mib 0 \
   --default-vcpu 1 \
   --default-mem-mib 256 \
   --pool-size 1 \

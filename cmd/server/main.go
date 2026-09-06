@@ -40,7 +40,7 @@ func main() {
 		kernelPath     = flag.String("kernel", "/opt/pyro/images/vmlinux", "Guest kernel path")
 		rootfsPath     = flag.String("rootfs", "/opt/pyro/images/rootfs.ext4", "Default rootfs path")
 		bridgeName     = flag.String("bridge", "fcbr0", "Network bridge name")
-		maxSandboxes   = flag.Int("max-sandboxes", 100, "Maximum concurrent sandboxes")
+		maxSandboxes   = flag.Int("max-sandboxes", 100, "Maximum concurrent sandboxes (0 = no limit)")
 		reaperInterval = flag.Duration("reaper-interval", 5*time.Second, "TTL reaper check interval")
 		execTimeout    = flag.Duration("exec-timeout", 300*time.Second, "Default exec timeout")
 		otlpEndpoint   = flag.String("otlp-endpoint", "", "OTLP HTTP endpoint (e.g., localhost:4318)")
