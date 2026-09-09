@@ -64,7 +64,7 @@ type Config struct {
 	// ExecTimeout is the default timeout for command execution.
 	ExecTimeout time.Duration
 
-	// MaxSandboxes is the maximum number of concurrent sandboxes.
+	// MaxSandboxes is the maximum number of concurrent sandboxes (0 = no limit).
 	MaxSandboxes int
 
 	// MaxVCPU is the max vCPUs per sandbox (0 = no limit).
@@ -155,7 +155,7 @@ type VMResources struct {
 // CreateSandbox provisions a new Firecracker microVM.
 func (m *Manager) CreateSandbox(ctx context.Context, apiKeyID, image string, ttl time.Duration, res VMResources) (*store.Sandbox, error) {
 	createStart := time.Now()
-	if m.ActiveCount() >= m.cfg.MaxSandboxes {
+	if m.cfg.MaxSandboxes > 0 && m.ActiveCount() >= m.cfg.MaxSandboxes {
 		return nil, fmt.Errorf("%w: %d/%d sandboxes running", ErrAtCapacity, m.ActiveCount(), m.cfg.MaxSandboxes)
 	}
 
