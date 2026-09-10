@@ -1,24 +1,21 @@
 // Package sandbox — images.go manages base images for sandboxes.
 //
-// Images are stored as rootfs.ext4 + vmlinux kernel pairs.
-// Each image has a name, and sandboxes reference images by name.
+// Base images are rootfs-only. The guest kernel is a host resource named
+// by the server's --kernel flag, not an image concern — see
+// docs/adr/0001-guest-kernel-is-a-host-resource.md.
 //
 // Directory layout:
 //
 //	{ImagesDir}/
 //	  ├── default/
-//	  │   ├── rootfs.ext4
-//	  │   └── vmlinux
+//	  │   └── rootfs.ext4
 //	  ├── python312/
-//	  │   ├── rootfs.ext4
-//	  │   └── vmlinux
+//	  │   └── rootfs.ext4
 //	  └── node22/
-//	      ├── rootfs.ext4
-//	      └── vmlinux
+//	      └── rootfs.ext4
 package sandbox
 
 import (
-	"cmp"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -28,8 +25,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -150,70 +145,6 @@ func NewImageManager(cfg ImageConfig, log *slog.Logger) (*ImageManager, error) {
 // in-flight and recently-failed pull state.
 func (im *ImageManager) Ledger() *imagestate.Ledger { return im.ledger }
 
-// KernelInfo describes an available guest kernel.
-type KernelInfo struct {
-	Version string `json:"version"`
-	Path    string `json:"path"`
-	Size    int64  `json:"size"`
-}
-
-// ListKernels returns all vmlinux-* kernels in the images dir, sorted by version descending.
-func (im *ImageManager) ListKernels() ([]*KernelInfo, error) {
-	entries, err := os.ReadDir(im.cfg.ImagesDir)
-	if err != nil {
-		return nil, fmt.Errorf("read images dir: %w", err)
-	}
-
-	var kernels []*KernelInfo
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		version, ok := strings.CutPrefix(name, "vmlinux-")
-		if !ok {
-			continue
-		}
-		path := filepath.Join(im.cfg.ImagesDir, name)
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		kernels = append(kernels, &KernelInfo{
-			Version: version,
-			Path:    path,
-			Size:    info.Size(),
-		})
-	}
-
-	// Sort descending by version string (higher versions first).
-	slices.SortFunc(kernels, func(a, b *KernelInfo) int {
-		return cmp.Compare(b.Version, a.Version)
-	})
-
-	return kernels, nil
-}
-
-// ResolveKernel returns the path for a kernel version, or the latest if version is empty.
-func (im *ImageManager) ResolveKernel(version string) (string, error) {
-	kernels, err := im.ListKernels()
-	if err != nil {
-		return "", err
-	}
-	if len(kernels) == 0 {
-		return "", fmt.Errorf("no kernels found in %s", im.cfg.ImagesDir)
-	}
-	if version == "" {
-		return kernels[0].Path, nil // latest (sorted descending)
-	}
-	for _, k := range kernels {
-		if k.Version == version {
-			return k.Path, nil
-		}
-	}
-	return "", fmt.Errorf("kernel version %q not found", version)
-}
-
 // List returns all available images.
 func (im *ImageManager) List() ([]*ImageInfo, error) {
 	entries, err := os.ReadDir(im.cfg.ImagesDir)
@@ -239,27 +170,16 @@ func (im *ImageManager) List() ([]*ImageInfo, error) {
 func (im *ImageManager) Get(name string) (*ImageInfo, error) {
 	dir := filepath.Join(im.cfg.ImagesDir, name)
 	rootfs := filepath.Join(dir, "rootfs.ext4")
-	kernel := filepath.Join(dir, "vmlinux")
 
 	rootfsInfo, err := os.Stat(rootfs)
 	if err != nil {
 		return nil, fmt.Errorf("rootfs not found for image %q: %w", name, err)
 	}
 
-	// Fall back to shared kernel in images root if no per-image kernel.
-	if _, err := os.Stat(kernel); err != nil {
-		shared := filepath.Join(im.cfg.ImagesDir, "vmlinux")
-		if _, err := os.Stat(shared); err != nil {
-			return nil, fmt.Errorf("kernel not found for image %q: %w", name, err)
-		}
-		kernel = shared
-	}
-
 	info := &ImageInfo{
 		Name:       name,
 		Status:     imagestate.StatusReady,
 		RootfsPath: rootfs,
-		KernelPath: kernel,
 		Size:       rootfsInfo.Size(),
 		CreatedAt:  rootfsInfo.ModTime(),
 	}

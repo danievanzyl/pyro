@@ -52,6 +52,19 @@ func postImage(t *testing.T, r http.Handler, body any) *httptest.ResponseRecorde
 	return w
 }
 
+// TestKernelsRoute_Gone asserts GET /kernels is no longer registered: the
+// guest kernel is a host resource named by --kernel, not something callers
+// list or select.
+func TestKernelsRoute_Gone(t *testing.T) {
+	r := newImageRouter(t)
+	req := httptest.NewRequest("GET", "/kernels", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d want 404; body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestCreateImage_RejectsBothSourceAndDockerfile(t *testing.T) {
 	r := newImageRouter(t)
 	w := postImage(t, r, map[string]string{

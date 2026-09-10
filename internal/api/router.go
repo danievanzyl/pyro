@@ -170,10 +170,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 type CreateSandboxRequest struct {
 	TTL            int    `json:"ttl"`                        // seconds
 	Image          string `json:"image"`                      // rootfs image name (default: "default")
-	Kernel         string `json:"kernel,omitempty"`            // kernel version (default: latest)
-	VCPU           int    `json:"vcpu,omitempty"`              // vCPU count (0 = image/server default)
-	MemMiB         int    `json:"mem_mib,omitempty"`           // memory in MiB (0 = image/server default)
-	ScratchSizeMiB int    `json:"scratch_size_mib,omitempty"`  // ephemeral scratch disk in MiB (0 = none)
+	VCPU           int    `json:"vcpu,omitempty"`             // vCPU count (0 = image/server default)
+	MemMiB         int    `json:"mem_mib,omitempty"`          // memory in MiB (0 = image/server default)
+	ScratchSizeMiB int    `json:"scratch_size_mib,omitempty"` // ephemeral scratch disk in MiB (0 = none)
 }
 
 func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
@@ -218,17 +217,6 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Resolve kernel version — empty means latest.
-	kernelPath := ""
-	if s.imageMgr != nil {
-		kp, err := s.imageMgr.ResolveKernel(req.Kernel)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "kernel: " + err.Error()})
-			return
-		}
-		kernelPath = kp
-	}
-
 	ak := APIKeyFromContext(r.Context())
 	ttl := time.Duration(req.TTL) * time.Second
 
@@ -243,7 +231,6 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	sb, err := s.manager.CreateSandbox(r.Context(), ak.ID, image, ttl, sandbox.VMResources{
 		VCPU:           req.VCPU,
-		KernelPath:     kernelPath,
 		MemMiB:         req.MemMiB,
 		ScratchSizeMiB: req.ScratchSizeMiB,
 	})

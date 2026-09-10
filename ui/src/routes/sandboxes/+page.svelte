@@ -3,12 +3,10 @@
 	import { subscribe } from '$lib/events.svelte.js';
 
 	let sandboxes = $state([]);
-	let kernels = $state([]);
 	let error = $state('');
 	let creating = $state(false);
 	let newTTL = $state(3600);
 	let newImage = $state('default');
-	let newKernel = $state('');
 	let newVCPU = $state(1);
 	let newMemMiB = $state(256);
 	let newScratchMiB = $state(0);
@@ -19,13 +17,6 @@
 			if (res.ok) sandboxes = await res.json();
 			error = '';
 		} catch (e) { error = e.message; }
-	}
-
-	async function fetchKernels() {
-		try {
-			const res = await apiFetch('/kernels');
-			if (res.ok) kernels = await res.json();
-		} catch {}
 	}
 
 	$effect(() => {
@@ -45,7 +36,6 @@
 		creating = true;
 		try {
 			const body = { ttl: newTTL, image: newImage, vcpu: newVCPU, mem_mib: newMemMiB };
-			if (newKernel) body.kernel = newKernel;
 			if (newScratchMiB > 0) body.scratch_size_mib = newScratchMiB;
 			const res = await apiFetch('/sandboxes', {
 				method: 'POST',
@@ -84,7 +74,6 @@
 	}
 
 	refresh();
-	fetchKernels();
 </script>
 
 <div class="page-header">
@@ -110,15 +99,6 @@
 				<option value="ubuntu">ubuntu</option>
 				<option value="python">python</option>
 				<option value="node">node</option>
-			</select>
-		</div>
-		<div class="field">
-			<label for="kernel-select">Kernel</label>
-			<select id="kernel-select" bind:value={newKernel}>
-				<option value="">latest</option>
-				{#each kernels as k}
-					<option value={k.version}>{k.version}</option>
-				{/each}
 			</select>
 		</div>
 		<div class="field">
