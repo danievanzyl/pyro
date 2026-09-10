@@ -3,10 +3,12 @@ package api
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -249,5 +251,56 @@ func TestCreateSandbox_RejectsNonReadyImage(t *testing.T) {
 				t.Errorf("body does not surface reason %q: %s", tc.wantInBody, w.Body.String())
 			}
 		})
+	}
+}
+
+// TestCreateSandbox_NotRejectedOnKernelGrounds is the issue #30 regression
+// test: an images dir laid out the way `pyro build-kernel` (host-shared
+// vmlinux) and `POST /images` (per-image rootfs.ext4, no per-image kernel)
+// actually leave it. On main, handleCreateSandbox called ResolveKernel,
+// which only matched a versioned kernel filename and never the bare vmlinux
+// build-kernel writes, so every create failed 400 "kernel: no kernels
+// found". The guest kernel is a host resource (--kernel), not resolved
+// per request, so this must never be rejected on kernel grounds.
+func TestCreateSandbox_NotRejectedOnKernelGrounds(t *testing.T) {
+	imagesDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(imagesDir, "vmlinux"), []byte("kernel"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	imgDir := filepath.Join(imagesDir, "myimage")
+	if err := os.MkdirAll(imgDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(imgDir, "rootfs.ext4"), []byte("rootfs"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	imgMgr, err := sandbox.NewImageManager(sandbox.ImageConfig{ImagesDir: imagesDir}, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st := setupTestStore(t)
+	mgr, err := sandbox.New(sandbox.Config{
+		StateDir:   t.TempDir(),
+		ImagesDir:  imagesDir,
+		BridgeName: "pyro-test-br0",
+	}, st, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("POST", "/sandboxes", strings.NewReader(`{"ttl":60,"image":"myimage"}`))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(req.Context(), apiKeyContextKey, &store.APIKey{ID: "test-key-id"})
+	req = req.WithContext(ctx)
+
+	w := httptest.NewRecorder()
+	s := &Server{manager: mgr, imageMgr: imgMgr, store: st, log: log}
+	s.handleCreateSandbox(w, req)
+
+	if w.Code == http.StatusBadRequest && strings.Contains(w.Body.String(), "kernel") {
+		t.Fatalf("request rejected on kernel grounds: %d %s", w.Code, w.Body.String())
 	}
 }
