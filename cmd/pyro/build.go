@@ -1,8 +1,11 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -205,16 +208,7 @@ func buildFromOCI(name, ociRef string, sizeMB int, postPkgs []string, postCmds [
 	cleanup(mnt, rootfs)
 
 	// Write image metadata
-	meta := map[string]any{
-		"name":   name,
-		"source": ociRef,
-		"size":   sizeMB,
-	}
-	metaJSON, _ := json.MarshalIndent(meta, "", "  ")
-	if err := os.WriteFile(filepath.Join(imgDir, "image.json"), metaJSON, 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "error: write image.json: %v\n", err)
-		os.Exit(1)
-	}
+	writeImageSidecar(imgDir, name, ociRef, sizeMB, rootfs)
 
 	fmt.Printf("==> %s image complete\n", name)
 }
@@ -259,7 +253,6 @@ func buildMinimal() {
 
 	createRootfs(rootfs, 50)
 	mnt := mustMount(rootfs)
-	defer cleanup(mnt, rootfs)
 
 	for _, d := range []string{"bin", "sbin", "usr/bin", "usr/sbin", "dev", "proc", "sys", "etc", "tmp", "root", "var/log"} {
 		os.MkdirAll(filepath.Join(mnt, d), 0755)
@@ -290,12 +283,8 @@ func buildMinimal() {
 	writeFile(filepath.Join(mnt, "etc/passwd"), "root:x:0:0:root:/root:/bin/sh\n")
 	writeFile(filepath.Join(mnt, "etc/group"), "root:x:0:\n")
 
-	meta := map[string]any{"name": "minimal", "source": "busybox-static", "size": 50}
-	metaJSON, _ := json.MarshalIndent(meta, "", "  ")
-	if err := os.WriteFile(filepath.Join(imgDir, "image.json"), metaJSON, 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "error: write image.json: %v\n", err)
-		os.Exit(1)
-	}
+	cleanup(mnt, rootfs)
+	writeImageSidecar(imgDir, "minimal", "busybox-static", 50, rootfs)
 
 	fmt.Println("==> Minimal image complete")
 }
@@ -392,6 +381,45 @@ func cleanup(mnt, rootfs string) {
 	if info, err := os.Stat(rootfs); err == nil {
 		fmt.Printf("    rootfs: %s (%.0f MB)\n", rootfs, float64(info.Size())/1024/1024)
 	}
+}
+
+// imageMetaName mirrors the server's sidecar filename (internal/sandbox
+// reads image-meta.json for Source/Digest/Labels).
+const imageMetaName = "image-meta.json"
+
+// writeImageSidecar persists the image-meta.json sidecar so ImageManager.Get
+// can surface Source and Digest for CLI-built images.
+func writeImageSidecar(imgDir, name, source string, sizeMB int, rootfsPath string) {
+	digest, err := fileDigest(rootfsPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warn: digest %s: %v\n", rootfsPath, err)
+	}
+	meta := map[string]any{
+		"name":   name,
+		"source": source,
+		"size":   sizeMB,
+		"digest": digest,
+	}
+	metaJSON, _ := json.MarshalIndent(meta, "", "  ")
+	if err := os.WriteFile(filepath.Join(imgDir, imageMetaName), metaJSON, 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "error: write %s: %v\n", imageMetaName, err)
+		os.Exit(1)
+	}
+}
+
+// fileDigest returns the sha256 content digest of the file at path, in the
+// same "sha256:<hex>" form the server records for registry pulls.
+func fileDigest(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func installAgent(mnt string) {
