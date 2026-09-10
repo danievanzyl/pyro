@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danievanzyl/pyro"
 	"github.com/danievanzyl/pyro/internal/store"
 	"github.com/google/uuid"
 )
@@ -154,8 +155,8 @@ func installFirecracker(baseDir string) {
 
 	run("wget", "-q", "--show-progress", "-O", tarPath, url)
 	run("tar", "-xzf", tarPath, "-C", "/tmp")
-	run("mv", fmt.Sprintf("/tmp/release-%s-x86_64/firecracker-%s-x86_64", version, version), "/usr/local/bin/firecracker")
-	if err := os.Chmod("/usr/local/bin/firecracker", 0755); err != nil {
+	run("mv", fmt.Sprintf("/tmp/release-%s-x86_64/firecracker-%s-x86_64", version, version), "/usr/bin/firecracker")
+	if err := os.Chmod("/usr/bin/firecracker", 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "error: chmod firecracker: %v\n", err)
 		os.Exit(1)
 	}
@@ -198,28 +199,14 @@ func detectWanIface() string {
 	return strings.TrimSuffix(string(out), "\n")
 }
 
+// renderServiceUnit returns the shipped deploy/pyro.service unit with every
+// /opt/pyro reference substituted for baseDir.
+func renderServiceUnit(baseDir string) string {
+	return strings.ReplaceAll(string(pyro.ServiceUnit), "/opt/pyro", baseDir)
+}
+
 func installService(baseDir string) {
-	service := fmt.Sprintf(`[Unit]
-Description=pyro - agentic sandbox platform
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=%s/bin/pyro-server \
-  --images-dir %s/images \
-  --state-dir %s/state \
-  --db %s/db/pyro.db \
-  --prometheus \
-  --max-per-key 10 \
-  --rate-limit 30
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-`, baseDir, baseDir, baseDir, baseDir)
-
-	if err := os.WriteFile("/etc/systemd/system/pyro.service", []byte(service), 0644); err != nil {
+	if err := os.WriteFile("/etc/systemd/system/pyro.service", []byte(renderServiceUnit(baseDir)), 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "error: write systemd service: %v\n", err)
 		os.Exit(1)
 	}

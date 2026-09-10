@@ -22,11 +22,11 @@ import (
 	"syscall"
 	"time"
 
-	pyro "github.com/danievanzyl/pyro"
 	"github.com/danievanzyl/pyro/internal/api"
 	"github.com/danievanzyl/pyro/internal/observability"
 	"github.com/danievanzyl/pyro/internal/sandbox"
 	"github.com/danievanzyl/pyro/internal/store"
+	"github.com/danievanzyl/pyro/ui"
 )
 
 func main() {
@@ -151,7 +151,7 @@ func main() {
 	}
 
 	// Embedded UI.
-	uiFS, err := fs.Sub(pyro.UIBuild, "ui/build")
+	uiFS, err := fs.Sub(ui.Build, "build")
 	if err != nil {
 		log.Warn("ui embed not available", "err", err)
 	}
