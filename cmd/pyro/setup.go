@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	pyro "github.com/danievanzyl/pyro"
+	"github.com/danievanzyl/pyro"
 	"github.com/danievanzyl/pyro/internal/store"
 	"github.com/google/uuid"
 )

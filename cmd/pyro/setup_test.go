@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	pyro "github.com/danievanzyl/pyro"
+	"github.com/danievanzyl/pyro"
 )
 
 func TestRenderServiceUnit_DefaultBaseMatchesEmbedded(t *testing.T) {
@@ -35,10 +35,10 @@ func TestRenderServiceUnit_NoLegacyFirecrackerFlag(t *testing.T) {
 	}
 }
 
-func TestRenderServiceUnit_PoolSizeNotOne(t *testing.T) {
+func TestRenderServiceUnit_PoolSizeZeroOrAbsent(t *testing.T) {
 	got := renderServiceUnit("/opt/pyro")
-	if strings.Contains(got, "--pool-size 1") {
-		t.Errorf("unit must not set --pool-size 1, Pool.Claim has no callers:\n%s", got)
+	if strings.Contains(got, "--pool-size") && !strings.Contains(got, "--pool-size 0") {
+		t.Errorf("unit must set --pool-size 0 or omit the flag, Pool.Claim has no callers:\n%s", got)
 	}
 }
 
@@ -51,5 +51,12 @@ func TestRenderServiceUnit_BridgeCreatedBeforeStart(t *testing.T) {
 	}
 	if startIdx == -1 || preIdx > startIdx {
 		t.Errorf("ExecStartPre must precede ExecStart so bridge failure blocks server start:\n%s", got)
+	}
+}
+
+func TestRenderServiceUnit_BridgeFailureIsFatal(t *testing.T) {
+	got := renderServiceUnit("/opt/pyro")
+	if strings.Contains(got, "ExecStartPre=-") {
+		t.Errorf("ExecStartPre must not use the \"-\" non-fatal prefix, or a failed bridge setup would silently let pyro start bridgeless:\n%s", got)
 	}
 }
