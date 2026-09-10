@@ -18,6 +18,21 @@ func testStore(t *testing.T) *Store {
 	return s
 }
 
+func TestNew_CreatesMissingParentDir(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "nested", "sub", "pyro.db")
+
+	s, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("New(%q) with missing parent dir: %v", dbPath, err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	if _, err := os.Stat(dbPath); err != nil {
+		t.Fatalf("expected db file at %q: %v", dbPath, err)
+	}
+}
+
 func TestCreateAndGetSandbox(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()

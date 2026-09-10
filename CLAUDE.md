@@ -31,26 +31,29 @@ make test           # full tests (requires Linux + KVM)
 
 ## API Endpoints
 
+All routes live under `/api`.
+
 ### Sandbox Lifecycle
-- `POST /sandboxes` — create sandbox with TTL
-- `GET /sandboxes` — list active sandboxes
-- `GET /sandboxes/{id}` — get sandbox details
-- `DELETE /sandboxes/{id}` — destroy sandbox
-- `POST /sandboxes/{id}/exec` — execute command (sync)
-- `PUT /sandboxes/{id}/files/*` — write file into sandbox
-- `GET /sandboxes/{id}/files/*` — read file from sandbox
-- `GET /sandboxes/{id}/ws?api_key=KEY` — WebSocket streaming exec
+- `POST /api/sandboxes` — create sandbox with TTL
+- `GET /api/sandboxes` — list active sandboxes
+- `GET /api/sandboxes/{id}` — get sandbox details
+- `DELETE /api/sandboxes/{id}` — destroy sandbox
+- `POST /api/sandboxes/{id}/exec` — execute command (sync)
+- `PUT /api/sandboxes/{id}/files/*` — write file into sandbox
+- `GET /api/sandboxes/{id}/files/*` — read file from sandbox
+- `GET /api/sandboxes/{id}/ws?api_key=KEY` — WebSocket streaming exec
 
 ### Images
-- `GET /images` — list base images
-- `GET /images/{name}` — get image info
-- `POST /images` — create image from Dockerfile
+- `GET /api/images` — list base images
+- `GET /api/images/{name}` — get image info
+- `POST /api/images` — create image from Dockerfile
 
 ### Streaming
-- `GET /events?api_key=KEY` — SSE event stream (sandbox lifecycle + health ticks)
+- `GET /api/events?api_key=KEY` — SSE event stream (sandbox lifecycle + health ticks)
 
 ### System
-- `GET /health` — health check
+- `GET /api/health` — health check
+- `GET /health` — backward-compat alias for `/api/health`
 
 ## Security Notes
 
