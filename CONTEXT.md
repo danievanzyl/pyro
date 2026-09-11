@@ -39,3 +39,16 @@ see `docs/adr/0002-host-readiness-is-reported-never-fatal.md`)
 The in-VM binary that runs as PID 1 and serves the vsock protocol. A sandbox's
 base image never runs its own `CMD` or `ENTRYPOINT`.
 _Avoid_: Init, guest agent
+
+**Runner controller**:
+The part of pyro that watches a GitHub repository or organisation for queued
+Actions jobs and creates one sandbox per job. It belongs to pyro and ships with
+it, but a pyro with no GitHub configuration does not have one. See
+`docs/adr/0003-the-runner-controller-lives-in-pyro-behind-a-one-way-boundary.md`.
+_Avoid_: Runner (unqualified), listener, provider, GARM provider
+
+**Runner**:
+The GitHub Actions runner agent running inside a sandbox, which claims a single
+job and exits. It is GitHub's software, not pyro's, and pyro never uses the word
+for anything else.
+_Avoid_: Agent (that is `pyro-agent`), worker, executor
