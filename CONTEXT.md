@@ -21,6 +21,14 @@ The single `vmlinux` a host boots every sandbox with, named by the server's
 selectable per sandbox. See `docs/adr/0001-guest-kernel-is-a-host-resource.md`.
 _Avoid_: Kernel version, kernel image (both imply a selectable set)
 
+**Cold boot**:
+How every sandbox starts: a fresh microVM boot, on demand, with no pre-warmed
+state carried over from any earlier sandbox. It is the only way a sandbox starts.
+See `docs/adr/0005-pyro-cold-boots-every-sandbox.md`.
+_Avoid_: Warm pool, snapshot pool, snapshot restore, resume (pyro takes no
+snapshots and restores none; the vocabulary describes a capability it does not
+have)
+
 **Host readiness**:
 Whether a host can actually boot a sandbox — `/dev/kvm`, the `firecracker`
 binary, the bridge with IP forwarding, a guest kernel, at least one base image,
