@@ -28,6 +28,13 @@ and root. Distinct from `/api/health`, which reports only that the server proces
 is answering.
 _Avoid_: Health, preflight (reserve `preflight` for the startup check itself)
 
+**Blocking check**:
+A host-readiness check whose failure means a sandbox cannot be created. The
+complement is a *degraded* check — the host still boots sandboxes without it.
+Only blocking checks gate readiness.
+_Avoid_: Critical, fatal (no host-readiness failure stops the server from running —
+see `docs/adr/0002-host-readiness-is-reported-never-fatal.md`)
+
 **pyro-agent**:
 The in-VM binary that runs as PID 1 and serves the vsock protocol. A sandbox's
 base image never runs its own `CMD` or `ENTRYPOINT`.
