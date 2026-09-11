@@ -68,3 +68,17 @@ the workload. pyro never supplies one — an image that needs services carries i
 own. See `docs/adr/0004-the-runner-image-starts-its-own-services.md`.
 _Avoid_: Entrypoint, init script, startup script (all imply something pyro or the
 image runtime invokes on its own)
+
+**Controller credential**:
+The single GitHub credential the runner controller authenticates with. It is the
+only secret pyro stores, it belongs to the host, and it never enters a sandbox.
+See `docs/adr/0006-the-controller-authenticates-as-a-github-app.md`.
+_Avoid_: Token (unqualified — several different tokens derive from this one), PAT,
+GitHub token
+
+**JIT config**:
+The single-use credential GitHub issues for one job, which a runner presents to
+claim that job and nothing else. It is the only GitHub credential that ever
+reaches a sandbox, and it is independent of the controller credential.
+_Avoid_: Registration token, runner token (both name different, longer-lived
+things in GitHub's own API)
