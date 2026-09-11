@@ -13,6 +13,7 @@ ui/bun.lock
 .gstack/
 /fcctl
 /server
+/pyro
 sdk/python/.venv/
 sdk/python/*.egg-info/
 sdk/python/**/__pycache__/
