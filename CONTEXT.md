@@ -52,3 +52,11 @@ The GitHub Actions runner agent running inside a sandbox, which claims a single
 job and exits. It is GitHub's software, not pyro's, and pyro never uses the word
 for anything else.
 _Avoid_: Agent (that is `pyro-agent`), worker, executor
+
+**Boot wrapper**:
+A script carried inside a base image that a sandbox's workload command points at.
+It starts whatever services that image's workload needs, then hands control to
+the workload. pyro never supplies one — an image that needs services carries its
+own. See `docs/adr/0004-the-runner-image-starts-its-own-services.md`.
+_Avoid_: Entrypoint, init script, startup script (all imply something pyro or the
+image runtime invokes on its own)
