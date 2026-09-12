@@ -61,6 +61,20 @@ job and exits. It is GitHub's software, not pyro's, and pyro never uses the word
 for anything else.
 _Avoid_: Agent (that is `pyro-agent`), worker, executor
 
+**Destroy**:
+Ending one sandbox immediately, before its workload has finished. It is pyro's
+act on a microVM and says nothing about the work that microVM was doing. See
+`docs/adr/0007-the-dashboard-stops-the-controller-and-destroys-sandboxes.md`.
+_Avoid_: Cancel (GitHub's verb for ending a job, which pyro never does), kill,
+terminate
+
+**Stopped**:
+Of the runner controller: running, but taking no new jobs. Sandboxes already
+running finish normally. Distinct from a pyro with no GitHub configuration, which
+has no runner controller at all.
+_Avoid_: Paused, disabled, drained (a stopped controller neither discards its
+configuration nor empties itself)
+
 **Boot wrapper**:
 A script carried inside a base image that a sandbox's workload command points at.
 It starts whatever services that image's workload needs, then hands control to
