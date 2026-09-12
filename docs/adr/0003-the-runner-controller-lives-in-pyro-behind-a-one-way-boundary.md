@@ -58,6 +58,12 @@ call. It compensates explicitly: it owns a real API key row, so `sandboxes.api_k
 attributes its VMs and the dashboard filters them like any client's, and it writes
 its own `store.LogAudit` entries.
 
+That filtering is narrower than this sentence implies, which #52 surfaced and
+#27 settled: runner sandboxes belong to a key the operator does not hold, so
+`GET /api/sandboxes` omits them entirely. The runner page reads the controller's
+own table instead and is the only place they are listed or destroyed. See
+`docs/adr/0007-the-dashboard-stops-the-controller-and-destroys-sandboxes.md`.
+
 A reader who finds GitHub Actions code in a sandbox platform and assumes it was
 never considered will be wrong; this is that consideration. The one-way import
 rule is cheap to hold and expensive to reinstate once breached, which is the
